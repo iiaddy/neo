@@ -511,7 +511,8 @@ def test_catalog_has_no_opencode_and_expected_count():
     # similarly-named providers (e.g. "opencode-go") stay.
     assert "opencode" not in ids
     assert "opencode-go" in ids
-    assert len(PROVIDERS) == 227
+    # 227 catalog/curated providers + the "custom" OpenAI-compatible entry.
+    assert len(PROVIDERS) == 228
     assert list_providers() == PROVIDERS
 
 

@@ -1,36 +1,61 @@
-"""The provider catalog must include every opencode-catalog provider except the
-one literally named "opencode"."""
+"""The provider catalog loads from providers.json: every opencode/models.dev
+catalog provider except the one literally named "opencode", the curated
+extras, and a user-configurable "custom" OpenAI-compatible entry."""
+import json
+from importlib import resources
+
+import neo.providers
 from neo.providers.catalog import PROVIDERS
-from neo.providers.catalog_gen import GENERATED_ROWS
 
 CURATED_EXTRAS = {"together", "fireworks", "kimi-code", "sambanova", "ollama"}
 
 
-def test_generated_count():
-    # 223 source providers minus the one literally named "opencode".
-    assert len(GENERATED_ROWS) == 222
+def _json_rows():
+    data = resources.files(neo.providers).joinpath("providers.json").read_text(
+        encoding="utf-8"
+    )
+    return json.loads(data)
+
+
+def test_json_is_source_of_truth():
+    rows = _json_rows()
+    assert isinstance(rows, list) and rows
+    for r in rows:
+        assert set(r) >= {"id", "title", "protocol", "base_url", "env_vars",
+                          "default_model", "extra_headers"}, r.get("id")
+    assert [r["id"] for r in rows] == [p.id for p in PROVIDERS]
+
+
+def test_catalog_count():
+    # 222 catalog providers + 5 curated extras + 1 custom entry.
+    assert len(PROVIDERS) == 222 + len(CURATED_EXTRAS) + 1
+
+
+def test_no_duplicate_ids():
+    ids = [p.id for p in PROVIDERS]
+    assert len(ids) == len(set(ids)), "duplicate provider ids"
 
 
 def test_opencode_literally_excluded():
-    ids = [r[0] for r in GENERATED_ROWS]
-    assert "opencode" not in ids
     assert all(p.id != "opencode" for p in PROVIDERS)
 
 
 def test_opencode_go_included():
     # Only the literal "opencode" is excluded; similarly-named providers stay.
-    ids = [r[0] for r in GENERATED_ROWS]
-    assert "opencode-go" in ids
     assert any(p.id == "opencode-go" for p in PROVIDERS)
 
 
-def test_merged_catalog_composition():
-    gen_ids = {r[0] for r in GENERATED_ROWS}
-    merged_ids = [p.id for p in PROVIDERS]
-    assert len(merged_ids) == len(set(merged_ids)), "duplicate provider ids"
-    extras = set(merged_ids) - gen_ids
-    assert extras == CURATED_EXTRAS
-    assert len(PROVIDERS) == 222 + len(CURATED_EXTRAS)
+def test_curated_extras_present():
+    ids = {p.id for p in PROVIDERS}
+    assert CURATED_EXTRAS <= ids
+
+
+def test_custom_openai_compatible_entry():
+    custom = next(p for p in PROVIDERS if p.id == "custom")
+    assert custom.title == "Custom (OpenAI-compatible)"
+    assert custom.protocol == "openai"
+    assert custom.base_url == "", "custom must be configured via neo.json"
+    assert "CUSTOM_API_KEY" in custom.env_vars
 
 
 def test_provider_specs_valid():
@@ -42,13 +67,23 @@ def test_provider_specs_valid():
         assert isinstance(p.env_vars, tuple), p.id
 
 
+def test_xiaomi_gateway_providers_from_mimocode():
+    # MiMo-Code's in-house gateway providers (models.dev) are included.
+    ids = {p.id: p for p in PROVIDERS}
+    for pid in ("xiaomi", "xiaomi-token-plan-cn", "xiaomi-token-plan-ams",
+                "xiaomi-token-plan-sgp"):
+        assert pid in ids, pid
+        assert ids[pid].base_url.startswith("https://"), pid
+
+
 # These providers need per-deployment configuration (custom endpoint, region,
 # or gateway URL) and therefore carry no generic base URL. They must not be
-# presented as working out of the box.
+# presented as working out of the box. "custom" joins them: the user supplies
+# providers.custom.base_url in neo.json.
 NEEDS_DEPLOYMENT_CONFIG = {
     "azure", "amazon-bedrock", "google-vertex", "azure-cognitive-services",
     "cloudflare-ai-gateway", "gitlab", "google-vertex-anthropic", "qvac",
-    "salad-cloud", "sap-ai-core", "watsonx",
+    "salad-cloud", "sap-ai-core", "watsonx", "custom",
 }
 
 

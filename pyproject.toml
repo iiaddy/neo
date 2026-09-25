@@ -21,7 +21,7 @@ neo = "neo.cli:main"
 where = ["src"]
 
 [tool.setuptools.package-data]
-neo = ["templates/**/*", "tui/themes/*.json"]
+neo = ["templates/**/*", "tui/themes/*.json", "providers/*.json"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
