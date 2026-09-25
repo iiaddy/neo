@@ -13,7 +13,7 @@ from ..agent.compact import estimate_tokens
 from ..agent.session import SessionStore
 from ..cli import boot_mcp, build_runtime
 from .composer import Composer
-from .dialogs import ChoiceModal, PermissionModal, QuestionModal
+from .dialogs import ChoiceModal, PermissionModal, QuestionModal, SecretModal
 from .model_picker import (ModelPicker, load_favorites, load_recents,
                            push_recent)
 from .session_dialog import SessionDialog
@@ -95,6 +95,7 @@ Screen { background: $background; }
 .modal-btns { margin-top: 1; }
 .modal-btns Button { margin-bottom: 1; width: 1fr; }
 .modal-list { max-height: 12; margin-top: 1; }
+.modal-count { color: $text-muted; text-align: right; margin-top: 1; }
 """
 
 
@@ -479,6 +480,8 @@ class NeoApp(App):
         builtins = [
             ("help", "show commands"),
             ("model", "switch model/provider"),
+            ("login", "log in to a provider (store API key)"),
+            ("logout", "log out from a provider"),
             ("theme", "switch theme"),
             ("sessions", "list / resume sessions"),
             ("new", "start a new session"),
@@ -520,6 +523,10 @@ class NeoApp(App):
             await self._pick_session()
         elif name == "model":
             await self._pick_model()
+        elif name == "login":
+            await self._login()
+        elif name == "logout":
+            await self._logout()
         elif name == "theme":
             await self._pick_theme()
         elif name == "init":
@@ -580,18 +587,116 @@ class NeoApp(App):
 
     async def _pick_model(self) -> None:
         from ..providers import list_providers
-        models = [f"{p.id}/{p.default_model}" for p in list_providers()
-                  if p.default_model]
+        provider_id = self._active_provider_id()
+        if provider_id is None:
+            # No active provider: let the user pick one first.
+            provider_id = await self._pick_provider("model — select provider")
+            if not provider_id:
+                return
+        specs = {p.id: p for p in list_providers()}
+        spec = specs.get(provider_id)
+        if spec is None:
+            self._notice(f"unknown provider '{provider_id}'.", "error")
+            return
+        ids = list(spec.models) or ([spec.default_model] if spec.default_model else [])
+        models = [f"{provider_id}/{m}" for m in ids]
+        if not models:
+            self._notice(f"provider '{provider_id}' has no models listed.", "warn")
+            return
         loop = asyncio.get_running_loop()
         fut: asyncio.Future = loop.create_future()
         self.push_screen(ModelPicker(models, favorites=load_favorites(),
-                                     recents=load_recents(), future=fut))
+                                     recents=load_recents(), future=fut,
+                                     title=f"model — {spec.title}"))
         picked = await fut
         if picked and self._harness:
             push_recent(picked)
             self.config.model = picked
             await self._rebuild_runtime()
             self._notice(f"model → {self.config.model}", "info")
+
+    def _active_provider_id(self) -> str | None:
+        """Provider backing the current model (``provider/model``).
+
+        Falls back to the single logged-in provider when exactly one key
+        is stored; None when the choice is ambiguous.
+        """
+        from ..auth import AuthStore
+        from ..providers import list_providers
+        ids = {p.id for p in list_providers()}
+        model = (self.config.model or "").strip()
+        if "/" in model:
+            pid = model.split("/", 1)[0]
+            if pid in ids:
+                return pid
+        try:
+            logged = [pid for pid in AuthStore().providers() if pid in ids]
+        except Exception:
+            logged = []
+        if len(logged) == 1:
+            return logged[0]
+        return None
+
+    async def _pick_provider(self, title: str,
+                             only: list[str] | None = None) -> str | None:
+        """Searchable provider picker. Resolves the provider id or None."""
+        from ..providers import list_providers
+        specs = list_providers()
+        if only is not None:
+            keep = set(only)
+            specs = [p for p in specs if p.id in keep]
+        items = [f"{p.id} — {p.title}" for p in specs]
+        index = {item: p.id for item, p in zip(items, specs)}
+        loop = asyncio.get_running_loop()
+        fut: asyncio.Future = loop.create_future()
+        self.push_screen(ModelPicker(items, future=fut, title=title,
+                                     record_recent=False))
+        picked = await fut
+        return index.get(picked) if picked else None
+
+    async def _prompt_secret(self, title: str, placeholder: str) -> str | None:
+        loop = asyncio.get_running_loop()
+        fut: asyncio.Future = loop.create_future()
+        self.push_screen(SecretModal(title, placeholder, fut))
+        return await fut
+
+    async def _login(self) -> None:
+        from ..auth import AuthStore
+        from ..providers import list_providers
+        provider_id = await self._pick_provider("login — select provider")
+        if not provider_id:
+            return
+        key = await self._prompt_secret(
+            f"API key for {provider_id}",
+            "paste key — stored in ~/.config/neo/auth.json (0600)")
+        if not key:
+            self._notice("login cancelled.", "warn")
+            return
+        AuthStore().set(provider_id, key)
+        if not (self.config.model or "").strip():
+            specs = {p.id: p for p in list_providers()}
+            default = (specs.get(provider_id).default_model
+                       if specs.get(provider_id) else "")
+            if default:
+                self.config.model = f"{provider_id}/{default}"
+                await self._rebuild_runtime()
+        self._notice(f"logged in to {provider_id}.", "info")
+
+    async def _logout(self) -> None:
+        from ..auth import AuthStore
+        try:
+            logged = sorted(AuthStore().providers())
+        except Exception:
+            logged = []
+        if not logged:
+            self._notice("no providers logged in.", "warn")
+            return
+        provider_id = await self._pick_provider("logout — select provider",
+                                                only=logged)
+        if not provider_id:
+            return
+        AuthStore().delete(provider_id)
+        self._notice(f"logged out from {provider_id}.", "info")
 
     async def _pick_theme(self) -> None:
         choices = [(n, n) for n in THEMES]

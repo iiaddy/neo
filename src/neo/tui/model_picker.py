@@ -2,9 +2,13 @@
 
 Backed by ~/.config/neo/models.json:
     {"favorites": [...], "recents": [...]}   (recents: max 10, deduped, most-recent-first)
+
+Also reused as a generic searchable picker (providers, …) via the
+``title`` / ``record_recent`` parameters.
 """
 from __future__ import annotations
 
+import asyncio
 import json
 from pathlib import Path
 
@@ -17,6 +21,7 @@ from textual.widgets import Input, Label, ListItem, ListView
 
 _DEFAULT_PATH = Path.home() / ".config" / "neo" / "models.json"
 _MAX_RECENTS = 10
+_MAX_ROWS = 200  # never render more rows than this per filter pass
 
 
 def _path(path: Path | str | None = None) -> Path:
@@ -151,61 +156,91 @@ def format_model_row(model: str, *, favorite: bool, recent: bool) -> str:
 # ---------------------------------------------------------------------------
 
 class ModelPicker(ModalScreen):
-    """Minimal model list widget. Resolves future with the chosen model id,
-    or None when dismissed."""
+    """Searchable list picker. Resolves future with the chosen item,
+    or None when dismissed.
+
+    Crash-safe rebuild: ``ListView.clear()`` is async — the old items are
+    only gone after awaiting it. Rebuilding synchronously with reused ids
+    raised DuplicateIds and killed the app on the first keystroke.
+    """
 
     def __init__(self, models: list[str],
                  favorites: list[str] | None = None,
                  recents: list[str] | None = None,
-                 future=None) -> None:
+                 future=None,
+                 title: str = "model",
+                 record_recent: bool = True) -> None:
         super().__init__()
         self._models = list(models)
         self._favorites = list(favorites or [])
         self._recents = list(recents or [])
         self._future = future
+        self._title = title
+        self._record_recent = record_recent
         self._visible: list[str] = []
+        self._gen = 0  # rebuild generation; stale passes abort
+        self._count_label: Label | None = None
+
+    def _rows(self, visible: list[str], gen: int) -> list[ListItem]:
+        return [
+            ListItem(
+                Label(Text(format_model_row(
+                    m, favorite=m in self._favorites,
+                    recent=m in self._recents))),
+                id=f"m-{gen}-{i}")
+            for i, m in enumerate(visible[:_MAX_ROWS])
+        ]
+
+    def _count_text(self, total: int) -> str:
+        shown = min(total, _MAX_ROWS)
+        return f"{shown} of {total}" if total > shown else f"{total}"
 
     def compose(self) -> ComposeResult:
         with Vertical(classes="modal"):
-            yield Label("model", classes="modal-title")
+            yield Label(self._title, classes="modal-title")
             yield Input(placeholder="type to filter…", id="model-filter")
             self._visible = pick_model(self._models, "",
                                        self._favorites, self._recents)
-            yield ListView(
-                *[ListItem(
-                    Label(Text(format_model_row(
-                        m, favorite=m in self._favorites,
-                        recent=m in self._recents))),
-                    id=f"m-{i}")
-                  for i, m in enumerate(self._visible)],
-                classes="modal-list")
+            self._gen = 1
+            yield ListView(*self._rows(self._visible, self._gen),
+                           classes="modal-list")
+            self._count_label = Label(self._count_text(len(self._visible)),
+                                      classes="modal-count")
+            yield self._count_label
 
     def on_mount(self) -> None:
         self.query_one("#model-filter", Input).focus()
 
-    def _rebuild(self, query: str) -> None:
+    async def _rebuild(self, query: str) -> None:
+        self._gen += 1
+        gen = self._gen
+        # Await a beat so rapid keystrokes coalesce; only the latest
+        # generation is allowed to touch the DOM.
+        await asyncio.sleep(0)
+        if gen != self._gen:
+            return
+        lst = self.query_one(ListView)
+        await lst.clear()
+        if gen != self._gen:
+            return
         self._visible = pick_model(self._models, query,
                                    self._favorites, self._recents)
-        lst = self.query_one(ListView)
-        lst.clear()
-        for i, m in enumerate(self._visible):
-            lst.append(ListItem(
-                Label(Text(format_model_row(
-                    m, favorite=m in self._favorites,
-                    recent=m in self._recents))),
-                id=f"m-{i}"))
+        await lst.mount(*self._rows(self._visible, gen))
+        if self._count_label is not None:
+            self._count_label.update(self._count_text(len(self._visible)))
 
     @on(Input.Changed)
-    def _filter_changed(self, event: Input.Changed) -> None:
+    async def _filter_changed(self, event: Input.Changed) -> None:
         if event.input.id == "model-filter":
-            self._rebuild(event.value)
+            await self._rebuild(event.value)
 
     @on(ListView.Selected)
     def _selected(self, event: ListView.Selected) -> None:
         idx = event.list_view.index
         if idx is not None and 0 <= idx < len(self._visible):
             chosen = self._visible[idx]
-            push_recent(chosen)
+            if self._record_recent:
+                push_recent(chosen)
             if self._future is not None and not self._future.done():
                 self._future.set_result(chosen)
         self.dismiss()

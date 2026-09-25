@@ -177,3 +177,101 @@ async def test_permission_modal_allow_once():
         await pilot.press("enter")  # focused "Allow once" button
         choice = await asyncio.wait_for(app.fut, 5)
     assert choice == "once"
+
+
+# ---------------------------------------------------------------------------
+# ModelPicker crash regression: typing in the filter must not kill the app
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_model_picker_filter_rebuild_no_crash():
+    """First keystroke used to raise DuplicateIds (clear() is async, old
+    items still in DOM when new ones mount with reused ids) and drop the
+    user back to the terminal. Typing must now filter in place."""
+    import asyncio
+
+    from textual.app import App
+    from textual.widgets import Input
+
+    from neo.tui.model_picker import ModelPicker
+
+    models = [f"anthropic/model-{i}" for i in range(60)]
+
+    class _A(App):
+        def on_mount(self):
+            self._fut = asyncio.get_running_loop().create_future()
+            self.push_screen(ModelPicker(models, future=self._fut))
+
+    app = _A()
+    async with app.run_test(size=(100, 30)) as pilot:
+        await pilot.pause(0.3)
+        assert isinstance(app.screen, ModelPicker)
+        assert app.screen.query_one("#model-filter", Input).has_focus
+        await pilot.press(*"model-1")
+        await pilot.pause(0.6)
+        # still alive on the picker screen — no crash
+        assert isinstance(app.screen, ModelPicker)
+        visible = app.screen._visible
+        assert visible, "filter must leave matches"
+        assert "anthropic/model-1" in visible
+        assert "anthropic/model-2" not in visible
+        # escape dismisses cleanly with None
+        await pilot.press("escape")
+        await pilot.pause(0.3)
+    assert app._fut.done() and app._fut.result() is None
+
+
+@pytest.mark.asyncio
+async def test_model_picker_rapid_typing_coalesces():
+    """Burst typing must not leave duplicate widget ids in the DOM."""
+    import asyncio
+
+    from textual.app import App
+    from textual.widgets import ListItem
+
+    from neo.tui.model_picker import ModelPicker
+
+    models = [f"openai/gpt-{i}" for i in range(120)]
+
+    class _A(App):
+        def on_mount(self):
+            self._fut = asyncio.get_running_loop().create_future()
+            self.push_screen(ModelPicker(models, future=self._fut))
+
+    app = _A()
+    async with app.run_test(size=(100, 30)) as pilot:
+        await pilot.pause(0.3)
+        await pilot.press(*"gpt-1")
+        await pilot.press(*["backspace"] * 5)  # clear back to empty
+        await pilot.press(*"gpt-2")
+        await pilot.pause(0.8)
+        assert isinstance(app.screen, ModelPicker)
+        ids = [item.id for item in app.screen.query(ListItem)]
+        assert len(ids) == len(set(ids)), "duplicate ListItem ids in DOM"
+        assert "openai/gpt-2" in app.screen._visible
+
+
+def test_active_provider_id_from_config_model():
+    from types import SimpleNamespace
+
+    from neo.tui.app import NeoApp
+
+    stub = SimpleNamespace(config=SimpleNamespace(model="anthropic/claude-x"))
+    assert NeoApp._active_provider_id(stub) == "anthropic"
+
+
+def test_active_provider_id_single_logged_in(monkeypatch, tmp_path):
+    from types import SimpleNamespace
+
+    import neo.auth
+    from neo.tui.app import NeoApp
+
+    store = neo.auth.AuthStore(path=tmp_path / "auth.json")
+    store.set("groq", "sk-test")
+    monkeypatch.setattr(neo.auth, "AuthStore", lambda *a, **k: store)
+
+    stub = SimpleNamespace(config=SimpleNamespace(model=""))
+    assert NeoApp._active_provider_id(stub) == "groq"
+
+    store.set("openai", "sk-test-2")
+    assert NeoApp._active_provider_id(stub) is None  # ambiguous

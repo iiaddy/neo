@@ -151,3 +151,50 @@ class ChoiceModal(ModalScreen):
         if event.key == "escape" and not self._future.done():
             self._future.set_result(None)
             self.dismiss()
+
+
+class SecretModal(ModalScreen):
+    """Single masked text input. Resolves future with the entered string,
+    or None when dismissed/escaped. The value is never echoed."""
+
+    def __init__(self, title: str, placeholder: str,
+                 future: asyncio.Future) -> None:
+        super().__init__()
+        self._title = title
+        self._placeholder = placeholder
+        self._future = future
+
+    def compose(self) -> ComposeResult:
+        with Vertical(classes="modal"):
+            yield Label(self._title, classes="modal-title")
+            yield Input(placeholder=self._placeholder, password=True,
+                        id="secret-input")
+            with Vertical(classes="modal-btns"):
+                yield Button("Save", id="secret-ok", variant="primary")
+                yield Button("Cancel", id="secret-cancel")
+
+    def on_mount(self) -> None:
+        self.query_one("#secret-input", Input).focus()
+
+    def _done(self, value: str | None) -> None:
+        if not self._future.done():
+            self._future.set_result(value)
+        self.dismiss()
+
+    @on(Button.Pressed)
+    def _pressed(self, event: Button.Pressed) -> None:
+        if event.button.id == "secret-ok":
+            value = self.query_one("#secret-input", Input).value.strip()
+            self._done(value or None)
+        else:
+            self._done(None)
+
+    @on(Input.Submitted)
+    def _submitted(self, event: Input.Submitted) -> None:
+        if event.input.id == "secret-input":
+            value = event.value.strip()
+            self._done(value or None)
+
+    def on_key(self, event) -> None:
+        if event.key == "escape" and not self._future.done():
+            self._done(None)

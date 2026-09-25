@@ -39,6 +39,7 @@ def _spec_from_row(row: dict[str, Any]) -> ProviderSpec:
         base_url=row.get("base_url") or "",
         env_vars=tuple(row.get("env_vars") or ()),
         default_model=row.get("default_model") or "",
+        models=tuple(row.get("models") or ()),
         extra_headers=dict(row.get("extra_headers") or {}),
     )
 

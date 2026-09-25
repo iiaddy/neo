@@ -131,7 +131,9 @@ neo snapshot | neo restore | neo fork        # git snapshots and session forks
 
 Inside the TUI, `/` opens the command palette, `@` completes file paths,
 `Ctrl+C` cancels the running turn, and typing while the agent works queues
-your message for the next turn.
+your message for the next turn. `/login` stores a provider API key,
+`/logout` removes it, and `/model` switches models within the active
+provider.
 
 ## Configuration
 

@@ -143,24 +143,43 @@ def row_for(pid: str, e: dict) -> dict:
         "base_url": e.get("api") or KNOWN_BASE_URLS.get(pid, ""),
         "env_vars": list(e.get("env") or ()),
         "default_model": default_model(e.get("models") or {}),
+        "models": sorted((e.get("models") or {}).keys()),
         "extra_headers": {},
     }
 
 
 def build(opencode_ref: str, models_dev_ref: str) -> list[dict]:
     curated_ids = {c["id"] for c in CURATED}
-    rows = [dict(c) for c in CURATED]
-
-    generated: dict[str, dict] = {}
+    # Load sources once; curated rows absorb the source model lists too so
+    # /model can show every model of a provider, not just its default.
+    apis: list[dict] = []
+    source_models: dict[str, set[str]] = {}
     for ref in (opencode_ref, models_dev_ref):
         api = load_source(ref)
+        apis.append(api)
+        for pid, e in api.items():
+            if _excluded(pid):
+                continue
+            source_models.setdefault(pid, set()).update(
+                (e.get("models") or {}).keys())
+
+    rows = []
+    for c in CURATED:
+        models = set(c.get("models") or ())
+        if c.get("default_model"):
+            models.add(c["default_model"])
+        models |= source_models.get(c["id"], set())
+        rows.append({**c, "models": sorted(models)})
+
+    generated: dict[str, dict] = {}
+    for api in apis:
         for pid in sorted(api):
             if _excluded(pid) or pid in curated_ids or pid in generated:
                 continue
             generated[pid] = row_for(pid, api[pid])
     rows.extend(generated[pid] for pid in sorted(generated))
 
-    rows.append(dict(CUSTOM))
+    rows.append({**CUSTOM, "models": []})
 
     ids = [r["id"] for r in rows]
     assert len(ids) == len(set(ids)), "duplicate provider ids after merge"
