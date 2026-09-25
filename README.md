@@ -34,7 +34,7 @@ dependencies.
 ## Install
 
 ```bash
-pip install neo-agent
+pip install neo-agnt
 ```
 
 Requires Python 3.10+. For a sandboxed `bash` tool on Linux, install

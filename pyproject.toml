@@ -3,9 +3,9 @@ requires = ["setuptools>=61"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "neo-agent"
+name = "neo-agnt"
 version = "0.1.0"
-description = "neo — autonomous terminal coding agent"
+description = "neo — a lightweight, autonomous terminal coding agent"
 readme = "README.md"
 requires-python = ">=3.10"
 license = { text = "MIT" }
@@ -16,6 +16,7 @@ dependencies = [
 
 [project.scripts]
 neo = "neo.cli:main"
+neo-agnt = "neo.cli:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
