@@ -46,6 +46,16 @@ THEMES: dict[str, dict[str, str]] = {
 DEFAULT_THEME = "neo-dark"
 
 
+# Extra themes (neo-ocean/forest/sunset/mono/raspberry/arctic) live in
+# themes_extra.py so the base file stays small; merged here so they are
+# first-class everywhere theme_names()/get_theme() are used.
+try:
+    from .themes_extra import EXTRA_THEMES as _EXTRA_THEMES
+    THEMES.update(_EXTRA_THEMES)
+except Exception:
+    pass
+
+
 def theme_names() -> list[str]:
     return list(THEMES)
 

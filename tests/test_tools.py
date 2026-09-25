@@ -300,9 +300,9 @@ def test_toolset_registration(tmp_path):
     ctx = make_ctx(tmp_path)
     tools = build_toolset(ctx)
     expected = [
-        "read", "list_dir", "glob", "grep", "write", "edit", "bash",
-        "webfetch", "websearch", "todo_write", "todo_read", "task",
-        "question", "skill",
+        "read", "list_dir", "glob", "grep", "write", "edit", "apply_patch",
+        "bash", "webfetch", "websearch", "todo_write", "todo_read", "task",
+        "question", "skill", "plan_enter", "plan_exit", "undo",
     ]
     assert sorted(tools) == sorted(expected)
     assert [c().name for c in TOOL_CLASSES] == expected

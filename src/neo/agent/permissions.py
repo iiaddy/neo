@@ -88,7 +88,15 @@ class PermissionPolicy:
         return decision if decision in ("allow", "ask", "deny") else "ask"
 
     def key_for_tool(self, tool_name: str) -> str:
-        return TOOL_PERMISSION_KEYS.get(tool_name, "session")
+        if tool_name in TOOL_PERMISSION_KEYS:
+            return TOOL_PERMISSION_KEYS[tool_name]
+        # MCP tools (<server>_<tool>) run third-party code; gate them
+        # under their own policy key when any are registered.
+        try:
+            from ..mcp.manager import MCP_TOOL_NAMES
+        except Exception:
+            MCP_TOOL_NAMES = set()
+        return "mcp" if tool_name in MCP_TOOL_NAMES else "session"
 
 
 #: Public alias kept for tests and external callers.

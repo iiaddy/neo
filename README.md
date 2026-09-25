@@ -89,10 +89,23 @@ degrades gracefully without pid isolation and says so.
   228 providers in the catalog
 - `src/neo/sandbox/` — bubblewrap argv builder, capability detection,
   domain-filtering proxy, session orchestration
-- `src/neo/tools/` — read, write, edit (fuzzy), glob, grep, list_dir, bash,
-  webfetch, websearch, todo_write/read, task (subagents), question, skill
+- `src/neo/tools/` — read, write, edit (fuzzy), apply_patch, glob, grep,
+  list_dir, bash (+pty), webfetch, websearch, todo_write/read, task
+  (subagents), question, skill, plan_enter/exit, undo
 - `src/neo/agent/` — the autonomous loop: plan → act → verify, parallel tools,
   doom-loop guard, transcript repair, retry/backoff, auto-compaction,
-  ask/allow/deny permissions
+  ask/allow/deny permissions, message queueing while busy
 - `src/neo/tui/` — Textual interface: `/` palette, streaming, permission
-  dialogs, themes
+  dialogs, themes, session dialog, model picker
+- `src/neo/mcp/` — Model Context Protocol: stdio + StreamableHTTP clients,
+  tool/prompt discovery with per-server failure isolation
+- `src/neo/lsp/` + `src/neo/format/` — real LSP diagnostics after edits and
+  formatter runs (ruff/black, prettier, gofmt, rustfmt)
+- `src/neo/vcs/` — git snapshots (shadow index, tree-hash handles), preview +
+  selective restore, session forks, worktrees; `neo snapshot|restore|fork`
+- `src/neo/plugins/`, `src/neo/commands/`, `src/neo/custom_tools/` —
+  project/global Python plugins with hooks, `.neo/commands/*.md` slash
+  commands, `.neo/tools/*.py` custom tools
+- `src/neo/agents/`, `src/neo/plan/` — agent roster with per-agent toolsets,
+  plan mode with handoff; `src/neo/auth.py` — `~/.config/neo/auth.json`
+  key store (0600)

@@ -90,7 +90,8 @@ def load_project_notes(workdir: str | Path) -> list[tuple[str, str]]:
 
 
 def build_system_prompt(*, tools: dict, project_notes: list[tuple[str, str]],
-                        skills_index: str = "", extra: str = "") -> str:
+                        skills_index: str = "", extra: str = "",
+                        mcp_instructions: str = "") -> str:
     parts = [NEO_SYSTEM_BASE]
     parts.append("## Environment\n"
                  f"- Working directory: {os.getcwd()}\n"
@@ -108,6 +109,8 @@ def build_system_prompt(*, tools: dict, project_notes: list[tuple[str, str]],
     if skills_index:
         parts.append(f"## Available skills\n{skills_index}\n"
                      "Load a skill with the `skill` tool when its expertise applies.")
+    if mcp_instructions:
+        parts.append(mcp_instructions)
     if extra:
         parts.append(extra)
     return "\n\n".join(parts)

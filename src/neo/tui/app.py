@@ -11,9 +11,12 @@ from textual.widgets import Label, Static
 
 from ..agent.compact import estimate_tokens
 from ..agent.session import SessionStore
-from ..cli import build_runtime
+from ..cli import boot_mcp, build_runtime
 from .composer import Composer
 from .dialogs import ChoiceModal, PermissionModal, QuestionModal
+from .model_picker import (ModelPicker, load_favorites, load_recents,
+                           push_recent)
+from .session_dialog import SessionDialog
 from .themes import THEMES
 from .widgets import (AssistantMessage, NoticeLine, ReasoningBlock, Sidebar,
                       StatusBar, ToolRow, UserMessage, VerifyRow)
@@ -152,6 +155,7 @@ class NeoApp(App):
         self._provider = None
         self._harness = None
         self._ctx = None
+        self._mcp = None
         self._discovered_cmds: dict = {}
         self._running = False
         self._pump: asyncio.Task | None = None
@@ -206,6 +210,17 @@ class NeoApp(App):
             return
         self._provider, self._harness, self._ctx = provider, harness, ctx
         self._discovered_cmds = discovered.get("commands", {})
+        # MCP servers boot after the base runtime (async); their tools merge
+        # into the same dict the harness holds, plus system instructions.
+        try:
+            self._mcp = await boot_mcp(self.config, self.workdir, harness.tools,
+                                       harness)
+            if self._mcp is not None and getattr(self._mcp, "errors", None):
+                for srv, err in self._mcp.errors.items():
+                    self._notice(f"mcp: server '{srv}' failed: {err}", "warn")
+        except Exception as e:  # noqa: BLE001 - MCP is optional, never fatal
+            self._notice(f"mcp: {e}", "warn")
+            self._mcp = None
         self._model_label = f"{provider.spec.id}/{harness.model}"
         self._refresh_topbar()
         if self._sidebar:
@@ -274,8 +289,8 @@ class NeoApp(App):
             await self._run_slash(text[1:])
             return
         if self._running and self._harness:
-            self._harness.steer(text)
-            self._notice("steered the running turn.", "info")
+            self._harness.queue(text)
+            self._notice("queued — runs when the current turn finishes.", "info")
             return
         await self._start_turn(text)
 
@@ -325,6 +340,11 @@ class NeoApp(App):
             self._update_context_gauge()
             if self._composer:
                 self._composer.focus_input()
+            # Drain messages queued while busy: start a fresh turn.
+            if self._harness is not None:
+                queued = self._harness.take_queued()
+                if queued:
+                    await self._start_turn("\n\n".join(queued))
 
     # -- event dispatch -------------------------------------------------------
 
@@ -464,13 +484,23 @@ class NeoApp(App):
             ("new", "start a new session"),
             ("clear", "clear the transcript view"),
             ("init", "scaffold AGENTS.md"),
+            ("plan", "enter plan mode for a goal"),
             ("todos", "show todo list"),
             ("exit", "quit neo"),
         ]
         custom = [(c.name, c.description or "project command")
                   for c in self._discovered_cmds.values()]
+        mcp_cmds = []
+        if self._mcp is not None:
+            try:
+                mcp_cmds = [(c["name"], c.get("description") or "mcp prompt")
+                            for c in self._mcp.prompt_commands()]
+            except Exception:
+                mcp_cmds = []
         seen = {n for n, _ in builtins}
-        return builtins + [(n, d) for n, d in custom if n not in seen]
+        out = builtins + [(n, d) for n, d in custom if n not in seen]
+        seen.update(n for n, _ in out)
+        return out + [(n, d) for n, d in mcp_cmds if n not in seen]
 
     async def _run_slash(self, line: str) -> None:
         parts = line.split(None, 1)
@@ -497,6 +527,18 @@ class NeoApp(App):
             from ..cli import cmd_init
             cmd_init(Namespace(global_=False, force=False))
             self._notice(".neo/ scaffolded.", "info")
+        elif name == "plan":
+            if not argstr.strip():
+                self._notice("usage: /plan <goal>", "warn")
+            else:
+                import importlib.resources
+                from ..agent.discovery import (expand_command_template,
+                                              parse_frontmatter)
+                tmpl = (importlib.resources.files("neo") / "templates"
+                        / "commands" / "plan.md").read_text(encoding="utf-8")
+                _, body = parse_frontmatter(tmpl)
+                prompt = expand_command_template(body.strip(), [argstr])
+                await self._on_submit(prompt)
         elif name == "todos":
             if self._sidebar:
                 self._sidebar.display = True
@@ -506,22 +548,48 @@ class NeoApp(App):
                 prompt = expand_command_template(
                     self._discovered_cmds[name].template, argstr.split())
                 await self._on_submit(prompt)
+            elif self._mcp is not None and await self._run_mcp_prompt(name, argstr):
+                return
             else:
                 self._notice(f"unknown command /{name}", "warn")
+
+    async def _run_mcp_prompt(self, name: str, argstr: str) -> bool:
+        """Execute an MCP prompt as a slash command. Returns True if handled."""
+        assert self._mcp is not None
+        try:
+            cmds = self._mcp.prompt_commands()
+        except Exception:
+            return False
+        cmd = next((c for c in cmds if c["name"] == name), None)
+        if cmd is None:
+            return False
+        parts = argstr.split()
+        args: dict[str, str] = {}
+        for i, spec in enumerate(cmd.get("arguments", [])):
+            aname = spec.get("name", f"arg{i + 1}")
+            args[aname] = parts[i] if i < len(parts) else ""
+        try:
+            text = await self._mcp.resolve_prompt(cmd["server"], cmd["prompt"], args)
+        except Exception as e:  # noqa: BLE001
+            self._notice(f"mcp prompt failed: {e}", "error")
+            return True
+        await self._on_submit(text)
+        return True
 
     # -- dialogs ---------------------------------------------------------------------
 
     async def _pick_model(self) -> None:
         from ..providers import list_providers
-        choices = [(f"{p.title}  ({p.default_model or '—'})", (p.id, p.default_model))
-                   for p in list_providers() if p.default_model]
+        models = [f"{p.id}/{p.default_model}" for p in list_providers()
+                  if p.default_model]
         loop = asyncio.get_running_loop()
         fut: asyncio.Future = loop.create_future()
-        self.push_screen(ChoiceModal("model", choices, fut))
+        self.push_screen(ModelPicker(models, favorites=load_favorites(),
+                                     recents=load_recents(), future=fut))
         picked = await fut
         if picked and self._harness:
-            pid, model = picked
-            self.config.model = f"{pid}/{model}"
+            push_recent(picked)
+            self.config.model = picked
             await self._rebuild_runtime()
             self._notice(f"model → {self.config.model}", "info")
 
@@ -537,11 +605,11 @@ class NeoApp(App):
 
     async def _pick_session(self) -> None:
         sessions = self.store.list()
-        choices = [("new session", "__new__")] + [
-            (f"{s['title'][:50]}  ({s['id'][:8]})", s["id"]) for s in sessions]
         loop = asyncio.get_running_loop()
         fut: asyncio.Future = loop.create_future()
-        self.push_screen(ChoiceModal("sessions", choices, fut))
+        self.push_screen(SessionDialog(
+            [{"id": "__new__", "title": "new session", "model": ""}] + sessions,
+            fut))
         picked = await fut
         if picked == "__new__":
             await self._new_session()
@@ -585,6 +653,18 @@ class NeoApp(App):
             gate=self._gate, emit=self._emit, ui=_UIBridge(self))
         self._provider, self._harness, self._ctx = provider, harness, ctx
         self._discovered_cmds = discovered.get("commands", {})
+        if self._mcp is not None:
+            try:
+                await self._mcp.stop()
+            except Exception:
+                pass
+            self._mcp = None
+        try:
+            self._mcp = await boot_mcp(self.config, self.workdir, harness.tools,
+                                       harness)
+        except Exception as e:  # noqa: BLE001 - MCP is optional, never fatal
+            self._notice(f"mcp: {e}", "warn")
+            self._mcp = None
         self._model_label = f"{provider.spec.id}/{harness.model}"
         self._refresh_topbar()
 
@@ -608,6 +688,20 @@ class NeoApp(App):
     async def _quit(self) -> None:
         if self._pump and not self._pump.done():
             self._pump.cancel()
+        plugins = getattr(self._ctx, "plugins", None)
+        if plugins is not None:
+            try:
+                await plugins.trigger("session.end",
+                                      {"session_id": self.session_id,
+                                       "reason": "shutdown"})
+            except Exception:
+                pass
+        if self._mcp is not None:
+            try:
+                await self._mcp.stop()
+            except Exception:
+                pass
+            self._mcp = None
         if self._provider is not None:
             try:
                 await self._provider.aclose()

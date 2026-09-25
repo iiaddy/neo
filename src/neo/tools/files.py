@@ -33,6 +33,27 @@ def _rel(ctx: ToolContext, p: Path) -> str:
         return str(p)
 
 
+async def _snapshot_diags(ctx: ToolContext, path: Path) -> list[dict]:
+    """Capture LSP diagnostics *before* an edit (best effort; [] on failure)."""
+    try:
+        from ..lsp.postedit import snapshot_diagnostics
+        return await snapshot_diagnostics(str(path), ctx.workdir, ctx.config)
+    except Exception:
+        return []
+
+
+async def _post_edit_note(ctx: ToolContext, path: Path,
+                          original_text: str | None,
+                          old_diags: list[dict] | None = None) -> str:
+    """Format the file and report new LSP diagnostics. Never raises."""
+    try:
+        from ..lsp.postedit import after_edit
+        return await after_edit(str(path), original_text, ctx.workdir,
+                                ctx.config, old_diagnostics=old_diags)
+    except Exception:
+        return ""
+
+
 class ReadTool(Tool):
     name = "read"
     description = (
@@ -252,7 +273,9 @@ class WriteTool(Tool):
         async with path_lock(ctx, path):
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_text(content, encoding="utf-8")
-        return ToolResult(output=f"Wrote {len(content)} chars to {_rel(ctx, path)}", title=_rel(ctx, path))
+        output = f"Wrote {len(content)} chars to {_rel(ctx, path)}"
+        output += await _post_edit_note(ctx, path, None)
+        return ToolResult(output=output, title=_rel(ctx, path))
 
 
 # ---------------------------------------------------------------- edit tool
@@ -404,6 +427,7 @@ class EditTool(Tool):
         if path.is_dir():
             return ToolResult(is_error=True, output=f"{path} is a directory.", title=self.name)
 
+        old_diags = await _snapshot_diags(ctx, path)
         async with path_lock(ctx, path):
             text = path.read_text(encoding="utf-8")
 
@@ -448,8 +472,11 @@ class EditTool(Tool):
         async with path_lock(ctx, path):
             path.write_text(updated, encoding="utf-8")
         n = len(spans)
+        output = (f"Replaced {n} occurrence{'s' if n != 1 else ''} in {_rel(ctx, path)} "
+                  f"(strategy: {chosen}).")
+        output += await _post_edit_note(ctx, path, text, old_diags)
         return ToolResult(
-            output=f"Replaced {n} occurrence{'s' if n != 1 else ''} in {_rel(ctx, path)} (strategy: {chosen}).",
+            output=output,
             title=_rel(ctx, path),
         )
 

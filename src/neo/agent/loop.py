@@ -67,6 +67,7 @@ class AgentHarness:
         self.session_id = session_id
         self._cancel = asyncio.Event()
         self._steer_q: asyncio.Queue[str] = asyncio.Queue()
+        self._inbox: list[str] = []  # queued while busy; drained via take_queued()
         self._last_sig: tuple | None = None
         self._doom_count = 0
         self._verify_streak = 0
@@ -78,6 +79,20 @@ class AgentHarness:
 
     def steer(self, text: str) -> None:
         self._steer_q.put_nowait(text)
+
+    def queue(self, text: str) -> None:
+        """Queue a message while the harness is busy.
+
+        Unlike steer() (which injects at the next step boundary), queued
+        messages wait for the current run() to finish. The caller drains
+        them with take_queued() and starts a fresh run.
+        """
+        self._inbox.append(text)
+
+    def take_queued(self) -> list[str]:
+        """Return and clear messages queued while busy."""
+        queued, self._inbox = self._inbox, []
+        return queued
 
     # -- public ---------------------------------------------------------
 
@@ -170,6 +185,13 @@ class AgentHarness:
                        "Do NOT call any tools. Answer in text only.]")
         else:
             schemas = self._tool_schemas()
+
+        plugins = getattr(self.ctx, "plugins", None)
+        if plugins is not None:
+            params = await plugins.trigger("chat.params", {
+                "system": system, "tools": schemas, "model": self.model})
+            system = params.get("system", system)
+            schemas = params.get("tools", schemas)
 
         attempt = 0
         text_parts: list[str] = []
@@ -282,18 +304,34 @@ class AgentHarness:
             else:
                 denied.append((tc, reason))
 
+        # Snapshot the worktree before any batch that can mutate it.
+        # auto_snapshot() never raises; it returns None outside git repos.
+        _MUTATING = {"write", "edit", "apply_patch", "bash"}
+        if any(tc["name"] in _MUTATING for tc, _ in approved):
+            from pathlib import Path
+            from ..vcs import auto_snapshot
+            auto_snapshot(Path(self.ctx.workdir), reason="pre-tool-batch")
+
         results: dict[str, tuple[Any, Any, int]] = {}
 
         async def _one(tc, tool):
             start = time.monotonic()
             try:
+                plugins = getattr(self.ctx, "plugins", None)
+                args = dict(tc["arguments"])
+                if plugins is not None:
+                    payload = await plugins.trigger(
+                        "tool.execute.before",
+                        {"tool": tool.name, "args": args})
+                    new_args = payload.get("args", args)
+                    args = new_args if isinstance(new_args, dict) else args
                 if tool.name in ("write", "edit"):
-                    path = str(tc["arguments"].get("path", ""))
+                    path = str(args.get("path", ""))
                     lock = self.ctx.locks.setdefault(path, asyncio.Lock())
                     async with lock:
-                        res = await tool.run(tc["arguments"], self.ctx)
+                        res = await tool.run(args, self.ctx)
                 else:
-                    res = await tool.run(tc["arguments"], self.ctx)
+                    res = await tool.run(args, self.ctx)
             except asyncio.CancelledError:
                 raise
             except Exception as exc:
@@ -301,6 +339,13 @@ class AgentHarness:
                 res = ToolResult(output=f"{type(exc).__name__}: {exc}",
                                  is_error=True)
             ms = int((time.monotonic() - start) * 1000)
+            if plugins is not None:
+                payload = await plugins.trigger(
+                    "tool.execute.after",
+                    {"tool": tool.name, "args": args, "result": res})
+                res = payload.get("result", res)
+                if payload.get("output") not in (None, res.output):
+                    res.output = payload["output"]
             return tc, res, ms
 
         for tc, tool in approved:
@@ -333,7 +378,7 @@ class AgentHarness:
                              "name": tc["name"], "content": reason,
                              "is_error": True})
 
-        edited = any(tc["name"] in ("write", "edit") and not res.is_error
+        edited = any(tc["name"] in ("write", "edit", "apply_patch") and not res.is_error
                      for tc, res, _ in results.values())
         if edited:
             self._verify_streak = 0
@@ -341,9 +386,44 @@ class AgentHarness:
 
     async def _permission(self, tool_name: str, target: str,
                           detail: str) -> tuple[bool, str]:
+        # Plan mode is authoritative while active: it allows research tools
+        # without approval popups and hard-denies code writes outside
+        # .neo/plans/. A deny here is final.
+        from ..plan.tools import plan_mode_active, plan_mode_allows
+        if plan_mode_active(self.ctx):
+            return plan_mode_allows(tool_name, target, self.ctx.workdir)
         policy = self.ctx.permissions
         key = policy.key_for_tool(tool_name)
+        # Bash: probe shlex-derived signatures from most to least specific.
+        # Per signature, the last matching rule wins (same as check());
+        # the first signature with any matching rule decides.
+        if tool_name == "bash":
+            from ..scan import scan
+            from .permissions import wildcard_match
+            for sig in scan(target):
+                sig_decision = None
+                for rule_key, pattern, action in policy._iter():
+                    if rule_key != "*" and rule_key != key:
+                        continue
+                    if wildcard_match(pattern, sig):
+                        sig_decision = action
+                if sig_decision == "allow":
+                    return True, ""
+                if sig_decision == "deny":
+                    return False, (
+                        f"Permission denied: bash '{sig}' is denied by policy.")
+                if sig_decision == "ask":
+                    break  # explicit ask rule: fall through to the gate below
         decision = policy.check(key, target)
+        plugins = getattr(self.ctx, "plugins", None)
+        if plugins is not None:
+            payload = await plugins.trigger("permission.ask", {
+                "tool": tool_name, "target": target,
+                "detail": detail, "decision": decision,
+            })
+            hook_decision = payload.get("decision", decision)
+            if hook_decision in ("allow", "deny", "ask"):
+                decision = hook_decision
         if decision == "allow":
             return True, ""
         if decision == "deny":
@@ -362,7 +442,8 @@ class AgentHarness:
     @staticmethod
     def _always_pattern(tool_name: str, target: str) -> str:
         if tool_name == "bash":
-            first = target.split()[0] if target.split() else target
+            from ..scan import first_word
+            first = first_word(target) or target
             return f"{first} *"
         return target
 
@@ -374,6 +455,15 @@ class AgentHarness:
             return str(args.get("pattern", args.get("path", "")))
         if tool_name == "bash":
             return str(args.get("command", ""))
+        if tool_name == "apply_patch":
+            # stable target for the permission pattern: files touched
+            from ..patch import parse_patch
+            try:
+                ops = parse_patch(str(args.get("patch", "")))
+            except ValueError:
+                return "apply_patch"
+            paths = sorted({op.move_to or op.path for op in ops})
+            return " ".join(paths) if paths else "apply_patch"
         if tool_name == "webfetch":
             return str(args.get("url", ""))
         if tool_name == "websearch":
@@ -392,6 +482,14 @@ class AgentHarness:
             return f"Write {args.get('path')} ({len(str(args.get('content', '')))} chars)"
         if tool_name == "bash":
             return str(args.get("command", ""))
+        if tool_name == "apply_patch":
+            from ..patch import parse_patch
+            try:
+                ops = parse_patch(str(args.get("patch", "")))
+                summary = ", ".join(f"{op.op} {op.move_to or op.path}" for op in ops)
+            except ValueError as exc:
+                summary = f"unparseable: {exc}"
+            return f"Apply patch ({summary})"[:800]
         return json.dumps(args)[:800]
 
     @staticmethod
@@ -400,6 +498,15 @@ class AgentHarness:
                  "list_dir": "path", "bash": "command", "webfetch": "url",
                  "websearch": "query", "grep": "pattern", "glob": "pattern",
                  "task": "description"}.get(tool_name)
+        if tool_name == "apply_patch":
+            from ..patch import parse_patch
+            try:
+                ops = parse_patch(str(args.get("patch", "")))
+                files = ", ".join(f"{op.op} {op.move_to or op.path}" for op in ops)
+                val = f"apply_patch: {files}"
+            except ValueError:
+                val = "apply_patch"
+            return val if len(val) <= 80 else val[:77] + "…"
         if short and args.get(short):
             val = str(args[short])
             return val if len(val) <= 80 else val[:77] + "…"

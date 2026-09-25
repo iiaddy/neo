@@ -41,15 +41,29 @@ def build_runtime(workdir: str | Path, config: NeoConfig,
         ui=ui,
         skills={name: s.content for name, s in skills.items()},
     )
+    from .plugins import PluginManager
+    ctx.plugins = PluginManager(workdir, config, emit=ctx.emit)
     tools = build_toolset(ctx)
     for name in config.disabled_tools:
         tools.pop(name, None)
+
+    # Agent roster: filter the toolset and prepend the agent's system prompt.
+    from .agents import load_agents, toolset_for
+    _agents = load_agents(getattr(config, "agents", None))
+    _agent_name = getattr(config, "agent", "build") or "build"
+    if _agent_name not in _agents:
+        _agent_name = "build"
+    _agent_def = _agents.get(_agent_name) or {}
+    tools = toolset_for(_agent_name, tools, _agents)
 
     notes = load_project_notes(workdir)
     skills_index = "\n".join(f"- {n}: {s.description or 'no description'}"
                              for n, s in sorted(skills.items()))
     system = build_system_prompt(tools=tools, project_notes=notes,
                                  skills_index=skills_index)
+    _agent_system = (_agent_def.get("system") or "").strip()
+    if _agent_system:
+        system = _agent_system + "\n\n" + system
 
     harness = AgentHarness(
         provider=provider, model=model_id or config.model, tools=tools,
@@ -106,6 +120,14 @@ async def run_print(prompt: str, workdir: str, config: NeoConfig,
     gate = _headless_gate_factory(allow_all)
     _, harness, _ctx, _ = build_runtime(workdir, config, gate=gate,
                                         session_id=sid)
+    mcp = None
+    try:
+        mcp = await boot_mcp(config, workdir, harness.tools, harness)
+        if mcp is not None and getattr(mcp, "errors", None):
+            for srv, err in mcp.errors.items():
+                print(f"[mcp] server '{srv}' failed: {err}")
+    except Exception as e:  # noqa: BLE001 - MCP is optional, never fatal
+        print(f"[mcp] {e}")
     print(f"neo {__version__} · {config.model} · session {sid}\n")
     try:
         async for ev in harness.run(messages):
@@ -154,6 +176,19 @@ async def run_print(prompt: str, workdir: str, config: NeoConfig,
         harness.cancel()
     except RuntimeError as exc:
         print(f"\nneo: error: {exc}")
+    finally:
+        plugins = getattr(_ctx, "plugins", None)
+        if plugins is not None:
+            try:
+                await plugins.trigger("session.end",
+                                      {"session_id": sid, "reason": "headless"})
+            except Exception:
+                pass
+        if mcp is not None:
+            try:
+                await mcp.stop()
+            except Exception:
+                pass
 
 
 def cmd_init(args) -> int:
@@ -175,6 +210,104 @@ def cmd_init(args) -> int:
         copied += 1
     print(f"neo init → {dest} ({copied} files)")
     print("Edit .neo/AGENTS.md to describe your project.")
+    return 0
+
+
+async def boot_mcp(config, workdir: str, tools: dict, harness):
+    """Start configured MCP servers and merge their tools + instructions.
+
+    Mutates *tools* (the harness's dict) in place and appends the manager's
+    system instructions to the harness. Returns the MCPManager or None when
+    no MCP servers are configured.
+    """
+    from .mcp import MCPManager
+    from .tools import attach_mcp_tools
+    cfg = getattr(config, "mcp", None) or {}
+    if not cfg.get("servers"):
+        return None
+    manager = MCPManager(cfg, workdir=workdir)
+    await manager.start()
+    attach_mcp_tools(tools, manager)
+    # Re-apply the active agent's toolset filter to the new tools.
+    try:
+        from .agents import load_agents, toolset_for
+        agent_name = getattr(config, "agent", "build") or "build"
+        agents = load_agents(getattr(config, "agents", None))
+        if agent_name in agents:
+            allowed = set(toolset_for(agent_name, tools, agents))
+            for name in list(tools):
+                if name not in allowed:
+                    del tools[name]
+    except Exception:
+        pass
+    try:
+        instr = manager.system_instructions()
+    except Exception:
+        instr = ""
+    if instr:
+        harness.system = ((harness.system + "\n\n" + instr)
+                          if harness.system else instr)
+    return manager
+
+
+def cmd_snapshot(args) -> int:
+    from pathlib import Path
+    from .vcs import VCSError, list_snapshots, snapshot
+    wd = Path(".")
+    if args.list:
+        try:
+            snaps = list_snapshots(wd)
+        except VCSError as exc:
+            print(f"neo: {exc}")
+            return 1
+        if not snaps:
+            print("no snapshots.")
+            return 0
+        import datetime as _dt
+        for s in snaps:
+            when = _dt.datetime.fromtimestamp(
+                s.get("ts", 0)).strftime("%Y-%m-%d %H:%M")
+            msg = s.get("message", "")
+            print(f"{s['handle'][:12]}  {when}  {msg}")
+        return 0
+    try:
+        handle = snapshot(wd, message="manual")
+    except VCSError as exc:
+        print(f"neo: {exc}")
+        return 1
+    if not handle:
+        print("neo: not a git repo (or git missing); no snapshot taken.")
+        return 1
+    print(f"snapshot {handle}")
+    return 0
+
+
+def cmd_restore(args) -> int:
+    from pathlib import Path
+    from .vcs import VCSError, preview_restore, restore
+    wd = Path(".")
+    try:
+        if args.dry_run:
+            diff = preview_restore(wd, args.handle, paths=args.paths or None)
+            print(diff if diff else "(no differences)")
+            return 0
+        result = restore(wd, args.handle, paths=args.paths or None)
+    except VCSError as exc:
+        print(f"neo: {exc}")
+        return 1
+    print(result)
+    return 0
+
+
+def cmd_fork(args) -> int:
+    from .agent.session import SessionStore
+    from .vcs import fork_session
+    try:
+        new_id = fork_session(SessionStore(), args.session)
+    except ValueError as exc:
+        print(f"neo: {exc}")
+        return 1
+    print(f"forked {args.session} → {new_id}")
     return 0
 
 
@@ -228,6 +361,17 @@ def main(argv: list[str] | None = None) -> int:
     sp_models = sub.add_parser("models", help="list providers")
     sp_models.add_argument("provider", nargs="?", default=None)
     sub.add_parser("config", help="show resolved configuration")
+    sp_snap = sub.add_parser("snapshot", help="git snapshot (undo checkpoint)")
+    sp_snap.add_argument("--list", action="store_true",
+                         help="list existing snapshots")
+    sp_rest = sub.add_parser("restore", help="restore a git snapshot")
+    sp_rest.add_argument("handle", help="snapshot tree-hash handle")
+    sp_rest.add_argument("--dry-run", action="store_true",
+                         help="show the diff without changing anything")
+    sp_rest.add_argument("paths", nargs="*", default=[],
+                         help="restore only these paths")
+    sp_fork = sub.add_parser("fork", help="fork a JSONL session")
+    sp_fork.add_argument("session", help="session id to clone")
     args = ap.parse_args(argv)
 
     if args.version:
@@ -242,6 +386,12 @@ def main(argv: list[str] | None = None) -> int:
         return cmd_models(args)
     if args.cmd == "config":
         return cmd_config(args, config, cfg_path)
+    if args.cmd == "snapshot":
+        return cmd_snapshot(args)
+    if args.cmd == "restore":
+        return cmd_restore(args)
+    if args.cmd == "fork":
+        return cmd_fork(args)
 
     if args.prompt:
         asyncio.run(run_print(args.prompt, ".", config, args.allow_all,

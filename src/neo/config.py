@@ -27,6 +27,7 @@ def default_permissions() -> dict:
         "web": {"*": "allow"},
         "task": {"*": "ask"},
         "session": {"*": "allow"},
+        "mcp": {"*": "ask"},
     }
 
 
@@ -44,6 +45,12 @@ class NeoConfig:
     verify_commands: list = field(default_factory=list)
     keybindings: dict = field(default_factory=dict)
     disabled_tools: list = field(default_factory=list)
+    mcp: dict = field(default_factory=dict)  # {"servers": {name: {...}}}
+    plugins: dict = field(default_factory=lambda: {"enabled": True, "dirs": []})
+    lsp: dict = field(default_factory=dict)
+    format: dict = field(default_factory=dict)
+    agent: str = "build"  # active primary agent for the session
+    agents: dict = field(default_factory=dict)  # user agent overrides
 
     @classmethod
     def from_dict(cls, data: dict) -> "NeoConfig":
@@ -51,7 +58,8 @@ class NeoConfig:
         clean = {k: v for k, v in data.items() if k in known}
         cfg = cls()
         for k, v in clean.items():
-            if k in ("permissions", "providers", "keybindings", "sandbox") and isinstance(v, dict):
+            if k in ("permissions", "providers", "keybindings", "sandbox", "mcp",
+                       "plugins", "lsp", "format", "agents") and isinstance(v, dict):
                 merged = getattr(cfg, k)
                 _deep_merge(merged, v)
             else:

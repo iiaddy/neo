@@ -78,6 +78,13 @@ class BashTool(Tool):
                 "type": "string",
                 "description": "Working directory (defaults to the session workdir).",
             },
+            "pty": {
+                "type": "boolean",
+                "description": ("Run under a real PTY (for interactive commands "
+                                "needing a terminal, e.g. prompts). Output keeps raw "
+                                "ANSI. Cannot be combined with the sandbox."),
+                "default": False,
+            },
         },
         "required": ["command"],
         "additionalProperties": False,
@@ -112,6 +119,29 @@ class BashTool(Tool):
                 sandbox_note += f"[sandbox] active (network={plan.network})\n"
 
         # --- spawn -------------------------------------------------------------
+        # PTY mode bypasses the sandbox argv (a PTY and bubblewrap's fd
+        # juggling don't compose); interactive commands are the exceptional
+        # case, so this is a clean opt-in, never a silent downgrade.
+        use_pty = bool(args.get("pty", False))
+        if use_pty:
+            if plan is not None and plan.sandboxed:
+                return ToolResult(is_error=True,
+                                  output="pty mode cannot be combined with the sandbox",
+                                  title="bash", details={"exit_code": -1})
+            from ..pty_runner import run_pty
+            text, exit_code = await run_pty(command, cwd=cwd,
+                                            timeout_s=timeout_ms / 1000)
+            output = text.rstrip("\n") or "(no output)"
+            if len(text) > _OUTPUT_CAP:
+                output = (text[:_OUTPUT_CAP].rstrip("\n") +
+                          f"\n... (output capped at {_OUTPUT_CAP} chars)")
+            return ToolResult(
+                output=output,
+                is_error=(exit_code or 0) != 0,
+                title=f"bash[pty]: {command[:60]}",
+                details={"exit_code": exit_code if exit_code is not None else -1,
+                         "pty": True},
+            )
         # session.__aenter__ is self-cleaning on failure; __aexit__ is
         # idempotent, so the finally always runs it exactly when needed.
         try:

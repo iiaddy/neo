@@ -79,7 +79,9 @@ def resolve_provider(provider_id: str, cfg: Any) -> Provider:
             default_model=overrides.get("default_model", ""),
         )
 
-    api_key = overrides.get("api_key") or _first_set_env(spec.env_vars)
+    from ..auth import resolve_api_key
+    api_key = (resolve_api_key(provider_id, cfg)
+               or _first_set_env(spec.env_vars))
     base_url = overrides.get("base_url") or spec.base_url
     if not base_url:
         raise ProviderConfigError(_NEEDS_BASE_URL_MSG.format(pid=provider_id))
