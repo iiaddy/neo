@@ -574,3 +574,36 @@ def test_resolve_protocol_mapping():
     p3 = resolve_provider("xai", FakeCfg({"xai": {"api_key": "k"}}))
     assert isinstance(p3, OpenAICompatProvider)
     assert _BY_ID["openrouter"].extra_headers["X-Title"] == "neo"
+
+
+def test_fixed_proxy_env_strips_bracketed_ipv6(monkeypatch):
+    from neo.providers.base import _fixed_proxy_env
+
+    monkeypatch.setenv(
+        "no_proxy", "localhost,127.0.0.1,::1,[::1],[fd8b:4f84:7d32:99::1]"
+    )
+    with _fixed_proxy_env():
+        assert (
+            __import__("os").environ["no_proxy"]
+            == "localhost,127.0.0.1,::1,::1,fd8b:4f84:7d32:99::1"
+        )
+    # original value restored afterwards
+    assert (
+        __import__("os").environ["no_proxy"]
+        == "localhost,127.0.0.1,::1,[::1],[fd8b:4f84:7d32:99::1]"
+    )
+
+
+def test_build_client_survives_bracketed_ipv6_no_proxy(monkeypatch):
+    # httpx 0.28 raises InvalidURL on "[::1]" in NO_PROXY at construction;
+    # neo must still build a working client (regression: sandbox egress).
+    import os
+
+    from neo.providers.base import _build_client
+
+    monkeypatch.setenv("https_proxy", "http://127.0.0.1:9")
+    monkeypatch.setenv("no_proxy", "localhost,[::1]")
+    client = _build_client(5.0)
+    assert client.timeout.connect == 5.0
+    # client was built with proxy env intact (not trust_env=False fallback)
+    assert client._transport is not None

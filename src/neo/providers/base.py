@@ -24,7 +24,9 @@ from __future__ import annotations
 
 import abc
 import asyncio
-from collections.abc import AsyncIterator
+import os
+from collections.abc import AsyncIterator, Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from typing import Any, ClassVar
 
@@ -127,6 +129,49 @@ class ProviderConfigError(Exception):
     """Raised when a provider's configuration (e.g. base_url) is missing."""
 
 
+# ---------------------------------------------------------------------------
+# Proxy environment handling
+# ---------------------------------------------------------------------------
+
+
+@contextmanager
+def _fixed_proxy_env() -> Iterator[None]:
+    """Temporarily sanitize NO_PROXY for httpx.
+
+    httpx 0.28 cannot parse bracketed IPv6 entries in NO_PROXY (e.g. "[::1]")
+    and raises InvalidURL while building the client; curl and most other
+    tools accept them. Stripping the brackets keeps the bypass entries
+    working (unbracketed IPv6 is parsed fine), so local providers such as
+    ollama still bypass the proxy.
+    """
+    saved: dict[str, str] = {}
+    for key in ("no_proxy", "NO_PROXY"):
+        val = os.environ.get(key)
+        if val and "[" in val:
+            fixed = ",".join(
+                part[1:-1] if part.startswith("[") and part.endswith("]") else part
+                for part in val.split(",")
+            )
+            if fixed != val:
+                saved[key] = val
+                os.environ[key] = fixed
+    try:
+        yield
+    finally:
+        for key, val in saved.items():
+            os.environ[key] = val
+
+
+def _build_client(timeout: float) -> httpx.AsyncClient:
+    try:
+        with _fixed_proxy_env():
+            return httpx.AsyncClient(timeout=timeout)
+    except httpx.InvalidURL:
+        # Proxy env still unparseable: run without it rather than dying.
+        # (Direct egress may be unavailable in such sandboxes.)
+        return httpx.AsyncClient(timeout=timeout, trust_env=False)
+
+
 class Provider(abc.ABC):
     """Base class for streaming LLM providers."""
 
@@ -149,12 +194,7 @@ class Provider(abc.ABC):
         if client is not None:
             self._client = client
         else:
-            try:
-                self._client = httpx.AsyncClient(timeout=timeout)
-            except httpx.InvalidURL:
-                # Malformed proxy env (e.g. bracketed IPv6 in NO_PROXY that
-                # this httpx version cannot parse) must not kill the agent.
-                self._client = httpx.AsyncClient(timeout=timeout, trust_env=False)
+            self._client = _build_client(timeout)
 
     @abc.abstractmethod
     async def stream(
