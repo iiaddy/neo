@@ -1,6 +1,12 @@
 # neo
 
-**neo** is a lightweight, autonomous terminal coding agent written in Python.
+[![PyPI](https://img.shields.io/pypi/v/neo-agnt)](https://pypi.org/project/neo-agnt/)
+[![Python](https://img.shields.io/badge/python-3.10%2B-blue)](https://www.python.org/downloads/)
+[![Tests](https://img.shields.io/badge/tests-339%20passed-brightgreen)](https://github.com/iiaddy/neo)
+[![License](https://img.shields.io/badge/license-MIT-green)](LICENSE)
+[![Providers](https://img.shields.io/badge/providers-228-orange)](https://github.com/iiaddy/neo)
+
+**neo** is a lightweight, autonomous terminal coding agent.
 Describe a task in plain language — neo plans the work, executes it with
 sandboxed tools, verifies the result, and streams everything live in your
 terminal.
@@ -14,9 +20,8 @@ neo:  planning… wrote .neo/plans/rate-limit.md
       done in 34s · 12 steps · $0.021
 ```
 
-Lightweight means: one `pip install`, no daemon, no browser, no IDE
-extension, no account. Plain terminal, plain JSON config, stdlib-first
-dependencies.
+Lightweight means: one install command, no daemon, no browser, no IDE
+extension, no account. Plain terminal, plain JSON config.
 
 ## Capabilities
 
@@ -33,19 +38,37 @@ dependencies.
 
 ## Install
 
+Requires Python 3.10+.
+
+**Recommended — `pipx` (isolated, `neo` lands on your PATH):**
+
 ```bash
-pip install neo-agnt
+sudo apt install pipx          # debian / ubuntu
+pipx ensurepath
+pipx install neo-agnt
 ```
 
-Requires Python 3.10+. For a sandboxed `bash` tool on Linux, install
-`bubblewrap` (and `socat` for filtered networking):
+Log out and back in once (or `source ~/.bashrc`), then verify:
 
 ```bash
-# debian / ubuntu
+neo --version
+```
+
+**Alternative — virtualenv:**
+
+```bash
+python3 -m venv ~/.neo-venv
+~/.neo-venv/bin/pip install neo-agnt
+ln -s ~/.neo-venv/bin/neo ~/.local/bin/neo
+```
+
+For the sandboxed `bash` tool on Linux, also install:
+
+```bash
 sudo apt install bubblewrap socat
 ```
 
-Set an API key — environment variable, `auth.json`, or `neo.json`
+Then set an API key — environment variable, `auth.json`, or `neo.json`
 (first match wins):
 
 ```bash
@@ -56,6 +79,42 @@ export ANTHROPIC_API_KEY="sk-..."
 # ~/.config/neo/auth.json  (created with 0600 permissions)
 { "anthropic": "sk-..." }
 ```
+
+### Troubleshooting
+
+**`error: externally-managed-environment` on `pip install neo-agnt`**
+
+Ubuntu 24.04+ blocks system-wide `pip install` (PEP 668). Do not fight it —
+use one of the methods above:
+
+```bash
+# option 1: pipx (recommended for CLI apps)
+sudo apt install pipx && pipx ensurepath && pipx install neo-agnt
+
+# option 2: virtualenv
+python3 -m venv ~/.neo-venv && ~/.neo-venv/bin/pip install neo-agnt
+
+# option 3 (not recommended): override the guard
+pip install --break-system-packages neo-agnt
+```
+
+**`neo: command not found` after `pipx install`**
+
+`pipx ensurepath` adds `~/.local/bin` to PATH — it takes effect on next
+login. Either re-login or run `source ~/.bashrc`, then check
+`echo $PATH` contains `~/.local/bin`.
+
+**`bubblewrap: command not found` when running bash**
+
+The sandbox needs bubblewrap on PATH. Install it (`sudo apt install
+bubblewrap`), or set `"sandbox": {"mode": "off"}` in `neo.json` to run
+bash directly (you lose isolation).
+
+**`No provider configured` / auth errors**
+
+neo resolves keys in this order: environment variable → 
+`~/.config/neo/auth.json` → `neo.json`. Run `neo config` to see the
+resolved configuration and which provider it will use.
 
 ## Quickstart
 
