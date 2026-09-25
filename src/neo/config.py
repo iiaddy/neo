@@ -6,6 +6,8 @@ import os
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from .sandbox.config import default_sandbox_config
+
 CONFIG_FILENAME = "neo.json"
 GLOBAL_CONFIG_DIR = Path.home() / ".config" / "neo"
 
@@ -38,6 +40,7 @@ class NeoConfig:
     thinking: str = "medium"  # off|low|medium|high
     permissions: dict = field(default_factory=default_permissions)
     providers: dict = field(default_factory=dict)  # pid -> {"api_key","base_url"}
+    sandbox: dict = field(default_factory=default_sandbox_config)
     verify_commands: list = field(default_factory=list)
     keybindings: dict = field(default_factory=dict)
     disabled_tools: list = field(default_factory=list)
@@ -48,7 +51,7 @@ class NeoConfig:
         clean = {k: v for k, v in data.items() if k in known}
         cfg = cls()
         for k, v in clean.items():
-            if k in ("permissions", "providers", "keybindings") and isinstance(v, dict):
+            if k in ("permissions", "providers", "keybindings", "sandbox") and isinstance(v, dict):
                 merged = getattr(cfg, k)
                 _deep_merge(merged, v)
             else:

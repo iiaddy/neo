@@ -188,12 +188,29 @@ def test_list_dir(tmp_path):
 
 
 def test_bash_echo_and_exit_code(tmp_path):
+    from neo.tools import shell as shell_mod
+
+    shell_mod._WARNED.clear()
     ctx = make_ctx(tmp_path)
     tools = tools_for(ctx)
     res = run(tools["bash"]({"command": "echo hello"}, ctx))
     assert not res.is_error
-    assert res.output.strip() == "hello"
+    assert res.output.strip().endswith("hello")
     assert res.details["exit_code"] == 0
+    # sandbox degrade warning appears once per process, not on every call
+    res2 = run(tools["bash"]({"command": "echo again"}, ctx))
+    assert res2.output.strip() == "again"
+
+
+def test_bash_sandbox_off_exact_output(tmp_path):
+    ctx = make_ctx(tmp_path)
+    ctx.config = SimpleNamespace(
+        verify_commands=[], disabled_tools=[], sandbox={"mode": "off"}
+    )
+    tools = tools_for(ctx)
+    res = run(tools["bash"]({"command": "echo hello"}, ctx))
+    assert not res.is_error
+    assert res.output.strip() == "hello"
 
 
 def test_bash_failing_command(tmp_path):
