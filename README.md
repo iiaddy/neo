@@ -2,9 +2,7 @@
 
 [![PyPI](https://img.shields.io/pypi/v/neo-agnt)](https://pypi.org/project/neo-agnt/)
 [![Python](https://img.shields.io/badge/python-3.10%2B-blue)](https://www.python.org/downloads/)
-[![Tests](https://img.shields.io/badge/tests-493%20passed-brightgreen)](https://github.com/iiaddy/neo)
 [![License](https://img.shields.io/badge/license-MIT-green)](LICENSE)
-[![Providers](https://img.shields.io/badge/providers-228-orange)](https://github.com/iiaddy/neo)
 
 **neo** is a lightweight, autonomous terminal coding agent. Describe a task —
 neo plans the work, executes it with sandboxed tools, verifies the result,
