@@ -210,6 +210,9 @@ class ModelPicker(ModalScreen):
 
     def on_mount(self) -> None:
         self.query_one("#model-filter", Input).focus()
+        lst = self.query_one(ListView)
+        if self._visible:
+            lst.index = 0
 
     async def _rebuild(self, query: str) -> None:
         self._gen += 1
@@ -226,27 +229,56 @@ class ModelPicker(ModalScreen):
         self._visible = pick_model(self._models, query,
                                    self._favorites, self._recents)
         await lst.mount(*self._rows(self._visible, gen))
+        # Highlight the first match, OpenCode-style.
+        lst.index = 0 if self._visible else None
         if self._count_label is not None:
             self._count_label.update(self._count_text(len(self._visible)))
 
-    @on(Input.Changed)
-    async def _filter_changed(self, event: Input.Changed) -> None:
-        if event.input.id == "model-filter":
-            await self._rebuild(event.value)
+    def _move_highlight(self, delta: int) -> None:
+        lst = self.query_one(ListView)
+        count = len(lst.children)
+        if not count:
+            return
+        idx = lst.index if lst.index is not None else (-1 if delta > 0 else 0)
+        lst.index = max(0, min(count - 1, idx + delta))
 
-    @on(ListView.Selected)
-    def _selected(self, event: ListView.Selected) -> None:
-        idx = event.list_view.index
+    def _choose_highlighted(self) -> None:
+        lst = self.query_one(ListView)
+        idx = lst.index
         if idx is not None and 0 <= idx < len(self._visible):
             chosen = self._visible[idx]
             if self._record_recent:
                 push_recent(chosen)
             if self._future is not None and not self._future.done():
                 self._future.set_result(chosen)
-        self.dismiss()
+            self.dismiss()
+        # No highlight (empty list): keep the picker open.
+
+    @on(Input.Changed)
+    async def _filter_changed(self, event: Input.Changed) -> None:
+        if event.input.id == "model-filter":
+            await self._rebuild(event.value)
+
+    @on(Input.Submitted)
+    def _filter_submitted(self, event: Input.Submitted) -> None:
+        # Enter while the filter has focus: the Input consumes the key
+        # itself (submit binding), so choose the highlighted match here.
+        if event.input.id == "model-filter":
+            event.stop()
+            self._choose_highlighted()
+
+    @on(ListView.Selected)
+    def _selected(self, event: ListView.Selected) -> None:
+        self._choose_highlighted()
 
     def on_key(self, event) -> None:
         if event.key == "escape":
             if self._future is not None and not self._future.done():
                 self._future.set_result(None)
             self.dismiss()
+        elif event.key in ("up", "down"):
+            # The filter Input has no up/down binding, so these bubble up
+            # here. Drive the list highlight OpenCode-style.
+            self._move_highlight(1 if event.key == "down" else -1)
+            event.prevent_default()
+            event.stop()

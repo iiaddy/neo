@@ -673,14 +673,16 @@ class NeoApp(App):
             self._notice("login cancelled.", "warn")
             return
         AuthStore().set(provider_id, key)
-        if not (self.config.model or "").strip():
-            specs = {p.id: p for p in list_providers()}
-            default = (specs.get(provider_id).default_model
-                       if specs.get(provider_id) else "")
-            if default:
-                self.config.model = f"{provider_id}/{default}"
-                await self._rebuild_runtime()
-        self._notice(f"logged in to {provider_id}.", "info")
+        # The logged-in provider becomes the active one, OpenCode-style,
+        # so /model immediately lists its models.
+        specs = {p.id: p for p in list_providers()}
+        spec = specs.get(provider_id)
+        default = spec.default_model if spec else ""
+        self.config.model = (f"{provider_id}/{default}"
+                             if default else provider_id)
+        await self._rebuild_runtime()
+        self._notice(f"logged in to {provider_id} — model → {self.config.model}",
+                     "info")
 
     async def _logout(self) -> None:
         from ..auth import AuthStore

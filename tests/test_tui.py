@@ -275,3 +275,141 @@ def test_active_provider_id_single_logged_in(monkeypatch, tmp_path):
 
     store.set("openai", "sk-test-2")
     assert NeoApp._active_provider_id(stub) is None  # ambiguous
+
+
+# ---------------------------------------------------------------------------
+# ModelPicker keyboard UX: arrows move, Enter selects (OpenCode-style)
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_model_picker_keyboard_navigation():
+    import asyncio
+
+    from textual.app import App
+    from textual.widgets import ListView
+
+    from neo.tui.model_picker import ModelPicker
+
+    models = ["b-model", "a-model", "c-model"]
+
+    class _A(App):
+        def on_mount(self):
+            self._fut = asyncio.get_running_loop().create_future()
+            self.push_screen(ModelPicker(models, future=self._fut))
+
+    app = _A()
+    async with app.run_test(size=(100, 30)) as pilot:
+        await pilot.pause(0.3)
+        picker = app.screen
+        lst = picker.query_one(ListView)
+        assert lst.index == 0  # first row highlighted on open
+        await pilot.press("down", "down")
+        await pilot.pause(0.2)
+        assert lst.index == 2
+        await pilot.press("up")
+        await pilot.pause(0.2)
+        assert lst.index == 1
+        # arrows clamp at the ends
+        await pilot.press("down", "down", "down")
+        await pilot.pause(0.2)
+        assert lst.index == 2
+        await pilot.press("enter")
+        await pilot.pause(0.3)
+    assert app._fut.done()
+    assert app._fut.result() == "c-model"  # highlight was on index 2
+
+
+@pytest.mark.asyncio
+async def test_model_picker_enter_selects_first_match():
+    import asyncio
+
+    from textual.app import App
+
+    from neo.tui.model_picker import ModelPicker
+
+    models = ["anthropic/claude-x", "groq/llama-3", "openai/gpt-5"]
+
+    class _A(App):
+        def on_mount(self):
+            self._fut = asyncio.get_running_loop().create_future()
+            self.push_screen(ModelPicker(models, future=self._fut))
+
+    app = _A()
+    async with app.run_test(size=(100, 30)) as pilot:
+        await pilot.pause(0.3)
+        await pilot.press(*"groq")
+        await pilot.pause(0.5)
+        assert app.screen._visible == ["groq/llama-3"]
+        await pilot.press("enter")
+        await pilot.pause(0.3)
+    assert app._fut.done()
+    assert app._fut.result() == "groq/llama-3"
+
+
+@pytest.mark.asyncio
+async def test_model_picker_enter_empty_list_keeps_open():
+    import asyncio
+
+    from textual.app import App
+
+    from neo.tui.model_picker import ModelPicker
+
+    class _A(App):
+        def on_mount(self):
+            self._fut = asyncio.get_running_loop().create_future()
+            self.push_screen(ModelPicker(["a-model"], future=self._fut))
+
+    app = _A()
+    async with app.run_test(size=(100, 30)) as pilot:
+        await pilot.pause(0.3)
+        await pilot.press(*"zzz-no-match")
+        await pilot.pause(0.5)
+        assert app.screen._visible == []
+        await pilot.press("enter")
+        await pilot.pause(0.3)
+        # still open, nothing resolved
+        assert isinstance(app.screen, ModelPicker)
+        assert not app._fut.done()
+
+
+@pytest.mark.asyncio
+async def test_login_switches_active_provider(monkeypatch, tmp_path):
+    from types import SimpleNamespace
+
+    import neo.auth
+    from neo.tui.app import NeoApp
+
+    store = neo.auth.AuthStore(path=tmp_path / "auth.json")
+    monkeypatch.setattr(neo.auth, "AuthStore", lambda *a, **k: store)
+
+    calls = {}
+
+    async def fake_pick_provider(title, only=None):
+        return "groq"
+
+    async def fake_prompt_secret(title, placeholder):
+        return "sk-test-key"
+
+    async def fake_rebuild(keep_session=False):
+        calls["rebuilt"] = True
+
+    stub = SimpleNamespace(
+        config=SimpleNamespace(model="anthropic/claude-sonnet-4-6"),
+        _pick_provider=fake_pick_provider,
+        _prompt_secret=fake_prompt_secret,
+        _rebuild_runtime=fake_rebuild,
+        _notice=lambda *a, **k: None,
+    )
+    await NeoApp._login(stub)
+    assert store.get("groq") == "sk-test-key"
+    assert stub.config.model.startswith("groq/")
+    assert calls.get("rebuilt") is True
+
+
+def test_active_provider_id_after_login_model():
+    from types import SimpleNamespace
+
+    from neo.tui.app import NeoApp
+
+    stub = SimpleNamespace(config=SimpleNamespace(model="groq/llama-3.3-70b-versatile"))
+    assert NeoApp._active_provider_id(stub) == "groq"
