@@ -6,10 +6,9 @@
 [![License](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 [![Providers](https://img.shields.io/badge/providers-228-orange)](https://github.com/iiaddy/neo)
 
-**neo** is a lightweight, autonomous terminal coding agent.
-Describe a task in plain language — neo plans the work, executes it with
-sandboxed tools, verifies the result, and streams everything live in your
-terminal.
+**neo** is a lightweight, autonomous terminal coding agent. Describe a task —
+neo plans the work, executes it with sandboxed tools, verifies the result,
+and streams everything live in your terminal.
 
 ```
 you:  neo -p "add rate limiting to the API"
@@ -20,103 +19,42 @@ neo:  planning… wrote .neo/plans/rate-limit.md
       done in 34s · 12 steps · $0.021
 ```
 
-Lightweight means: one install command, no daemon, no browser, no IDE
-extension, no account. Plain terminal, plain JSON config.
-
-## Capabilities
-
-| Area | What you get |
-| --- | --- |
-| Agent loop | plan → act → verify; parallel tool calls, retries with backoff, doom-loop guard, transcript repair, auto-compaction |
-| Tools (18) | `read` `write` `edit` `apply_patch` `glob` `grep` `list_dir` `bash` (+pty) `webfetch` `websearch` `todo_write` `todo_read` `task` `question` `skill` `plan_enter` `plan_exit` `undo` |
-| Sandbox | every `bash` call can run in bubblewrap: user/IPC/PID/net namespaces, read-only root, hidden secrets, domain-filtered network |
-| Providers | 228 in the catalog (OpenAI / Anthropic / Gemini protocols); any OpenAI-compatible endpoint works with just a `base_url` |
-| Plan mode | changes are drafted to `.neo/plans/`, edits locked to the plan until you approve via `plan_exit` |
-| Safety net | permission rules (`allow`/`ask`/`deny`), git snapshots before risky batches, `undo`, session forks, worktrees |
-| Code intelligence | LSP diagnostics (pyright, tsserver, gopls, rust-analyzer, eslint) + formatters run after every edit |
-| Extensibility | MCP servers, Python plugins with hooks, `.neo/commands/*.md` slash commands, `.neo/tools/*.py` custom tools, skills |
+One install, no daemon, no browser, no IDE extension, no account.
 
 ## Install
 
 Requires Python 3.10+.
 
-**Recommended — `pipx` (isolated, `neo` lands on your PATH):**
-
 ```bash
-sudo apt install pipx          # debian / ubuntu
-pipx ensurepath
-pipx install neo-agnt
+pipx install neo-agnt        # recommended (isolated, neo lands on PATH)
+# or
+pip install neo-agnt
 ```
 
-Log out and back in once (or `source ~/.bashrc`), then verify:
+Update to the latest version:
 
 ```bash
-neo --version
+pipx upgrade neo-agnt
+# or
+pip install --upgrade neo-agnt
 ```
 
-**Alternative — virtualenv:**
-
-```bash
-python3 -m venv ~/.neo-venv
-~/.neo-venv/bin/pip install neo-agnt
-ln -s ~/.neo-venv/bin/neo ~/.local/bin/neo
-```
-
-For the sandboxed `bash` tool on Linux, also install:
+Sandboxed `bash` needs bubblewrap on Linux:
 
 ```bash
 sudo apt install bubblewrap socat
 ```
 
-Then set an API key — environment variable, `auth.json`, or `neo.json`
-(first match wins):
+Set an API key — first match wins (env → `~/.config/neo/auth.json` → `neo.json`):
 
 ```bash
 export ANTHROPIC_API_KEY="sk-..."
 ```
 
-```bash
-# ~/.config/neo/auth.json  (created with 0600 permissions)
-{ "anthropic": "sk-..." }
-```
+Ubuntu 24.04+ blocks system-wide `pip install` (PEP 668) — use `pipx` or a
+virtualenv instead of `--break-system-packages`.
 
-### Troubleshooting
-
-**`error: externally-managed-environment` on `pip install neo-agnt`**
-
-Ubuntu 24.04+ blocks system-wide `pip install` (PEP 668). Do not fight it —
-use one of the methods above:
-
-```bash
-# option 1: pipx (recommended for CLI apps)
-sudo apt install pipx && pipx ensurepath && pipx install neo-agnt
-
-# option 2: virtualenv
-python3 -m venv ~/.neo-venv && ~/.neo-venv/bin/pip install neo-agnt
-
-# option 3 (not recommended): override the guard
-pip install --break-system-packages neo-agnt
-```
-
-**`neo: command not found` after `pipx install`**
-
-`pipx ensurepath` adds `~/.local/bin` to PATH — it takes effect on next
-login. Either re-login or run `source ~/.bashrc`, then check
-`echo $PATH` contains `~/.local/bin`.
-
-**`bubblewrap: command not found` when running bash**
-
-The sandbox needs bubblewrap on PATH. Install it (`sudo apt install
-bubblewrap`), or set `"sandbox": {"mode": "off"}` in `neo.json` to run
-bash directly (you lose isolation).
-
-**`No provider configured` / auth errors**
-
-neo resolves keys in this order: environment variable → 
-`~/.config/neo/auth.json` → `neo.json`. Run `neo config` to see the
-resolved configuration and which provider it will use.
-
-## Quickstart
+## Use
 
 ```bash
 neo                                          # interactive TUI
@@ -129,21 +67,19 @@ neo config                                   # show resolved configuration
 neo snapshot | neo restore | neo fork        # git snapshots and session forks
 ```
 
-Inside the TUI, `/` opens the command palette, `@` completes file paths,
-`Ctrl+C` cancels the running turn, and typing while the agent works queues
-your message for the next turn. `/login` stores a provider API key,
-`/logout` removes it, and `/model` switches models within the active
-provider.
+In the TUI: `/` opens the command palette, `@` completes file paths,
+`Ctrl+C` cancels the running turn, typing mid-run queues your message for
+the next turn. `/login` stores a provider key, `/logout` removes it,
+`/model` switches models within the active provider.
 
-## Configuration
+## Configure
 
-`neo.json` — global at `~/.config/neo/neo.json`, per-project at `./neo.json`
-or `./.neo/neo.json` (project overrides global):
+`~/.config/neo/neo.json` (global); `./neo.json` or `./.neo/neo.json`
+(project overrides global):
 
 ```json
 {
   "model": "anthropic/claude-sonnet-4-6",
-  "small_model": "anthropic/claude-haiku-4-5",
   "max_steps": 40,
   "theme": "neo-dark",
   "verify_commands": ["ruff check .", "pytest -x -q"],
@@ -156,140 +92,100 @@ or `./.neo/neo.json` (project overrides global):
     "my-proxy": { "base_url": "https://proxy.internal/v1", "api_key_env": "PROXY_KEY" }
   },
   "sandbox": { "mode": "auto", "network": "filtered" },
-  "mcp": {
-    "servers": {
-      "fs": { "command": "npx", "args": ["-y", "@modelcontextprotocol/server-filesystem", "/data"] }
-    }
-  }
+  "mcp": { "servers": {
+    "fs": { "command": "npx", "args": ["-y", "@modelcontextprotocol/server-filesystem", "/data"] }
+  } }
 }
 ```
 
-Permission rules are `{tool: {pattern: allow|ask|deny}}`, last match wins.
-`neo config` prints the fully resolved configuration.
+Permissions are `{tool: {pattern: allow|ask|deny}}`, last match wins. Every
+command in a compound (`a && b`) is evaluated — one deny blocks the whole
+thing. `neo config` prints the fully resolved configuration.
 
 ## Sandbox
 
-On Linux, `bash` runs inside bubblewrap — the same primitive OpenAI Codex
-and Anthropic's sandbox runtime build on. The model sees a normal shell;
-underneath it gets namespaces, a read-only root, and filtered egress.
+On Linux, `bash` runs in bubblewrap: namespaces, read-only root, filtered
+egress. Every result is tagged `[sandbox] active (network=…)` so you always
+know what isolation was in effect.
 
 ```json
-{
-  "sandbox": {
+{ "sandbox": {
     "mode": "auto",
     "network": "filtered",
-    "allowedDomains": ["github.com", "*.github.com", "pypi.org", "*.pypi.org"],
-    "deniedDomains": [],
-    "allowWrite": ["."],
-    "denyRead": ["~/.ssh", "~/.aws", "~/.gnupg"],
+    "allowedDomains": ["github.com", "*.pypi.org"],
+    "denyRead": ["~/.ssh", "~/.aws"],
     "denyWrite": [".env"],
-    "passEnv": ["PATH", "HOME", "LANG"],
-    "allowSecrets": [],
-    "privateTmp": true
-  }
-}
+    "passEnv": ["PATH", "HOME", "LANG"]
+} }
 ```
 
-- `mode`: `auto` (warn once, run unsandboxed if bubblewrap is missing),
-  `strict` (fail loudly instead of running unsandboxed), `off`.
-- `network`: `none` (fully offline), `filtered` (isolated net namespace +
-  domain-allowlist proxy), `full`.
-- Environment is cleared; only `passEnv` survives, and secret-looking
-  variables are stripped unless listed in `allowSecrets`.
-
-Every bash result is tagged — `[sandbox] active (network=filtered)` —
-so you always know what isolation was in effect.
+`mode`: `auto` (warn, run unsandboxed if bubblewrap is missing) ·
+`strict` (fail loudly) · `off`.
+`network`: `none` (offline) · `filtered` (domain-allowlist proxy) · `full`.
+Environment is cleared except `passEnv`; secret-looking variables are
+stripped.
 
 ## Plan mode
 
-For non-trivial work, neo drafts a plan first and locks edits to it:
-
-```
-you:  /plan add oauth login
-neo:  wrote .neo/plans/oauth-login.md — 5 steps, 3 files
-      [plan_enter] edits restricted to the plan. review, then approve.
-you:  looks good, proceed
-neo:  [plan_exit] approved — executing as build turn…
-      ✓ edited src/auth.py …  ✓ bash: pytest → 58 passed
-```
-
-Plans live in `.neo/plans/` as Markdown. Nothing outside the plan is
-touched until you approve.
+Non-trivial work is drafted to `.neo/plans/` first; edits stay locked to
+the plan until you approve the `plan_exit` prompt. Nothing outside the plan
+is touched before approval.
 
 ## Safety net
 
 ```bash
-neo snapshot                  # snapshot the worktree (git tree-hash handle)
-neo snapshot --list           # list snapshots
-neo restore <id> --dry-run    # preview what a restore would change
-neo restore <id>              # restore files from a snapshot
-neo fork                      # fork the session (copy-on-write)
+neo snapshot               # snapshot the worktree (git tree-hash handle)
+neo restore <id>           # restore files (post-snapshot files are deleted)
+neo restore <id> --dry-run # preview what a restore would change
+neo fork                   # fork the session (copy-on-write)
 ```
 
-Snapshots are also taken automatically before risky tool batches, and the
-`undo` tool (approval-gated) rolls back the last mutation.
+Snapshots are taken automatically before risky tool batches, and the `undo`
+tool (approval-gated) rolls back the last mutation.
 
-## MCP
+## Extend
 
-Add any MCP server in `neo.json`; its tools appear as `server_tool`,
-its prompts become slash commands:
+**MCP** — servers in `neo.json`; their tools appear as `server_tool`, their
+prompts become slash commands. One failing server never takes down the rest.
 
-```json
-{ "mcp": { "servers": {
-  "github": { "command": "npx", "args": ["-y", "@modelcontextprotocol/server-github"] },
-  "remote": { "url": "https://mcp.internal/v1", "headers": { "Authorization": "Bearer ${MCP_TOKEN}" } }
-} } }
-```
-
-Each server is isolated — one failing server never takes down the rest.
-
-## Plugins
-
-Python plugins live in `~/.neo/plugins/` or `<project>/.neo/plugins/`.
-A plugin is a module exposing `hooks`:
+**Plugins** — `~/.neo/plugins/*.py` exposing `hooks`:
 
 ```python
-# ~/.neo/plugins/notify.py
 def on_tool_after(event):
     if event.tool == "bash" and event.result.is_error:
-        desktop_notify("neo", f"bash failed: {event.result.output[:120]}")
+        notify("bash failed")
 
 hooks = {"tool.execute.after": on_tool_after}
 ```
 
-Available hooks: `tool.execute.before/after`, `permission.ask`,
-`chat.params`, `session.end`. Plugins can also
-register their own tools.
+Hooks: `tool.execute.before/after`, `permission.ask`, `chat.params`,
+`session.end`. Plugins can also register their own tools.
 
-## Custom commands and tools
+**Commands** — `.neo/commands/*.md` with optional frontmatter; `$1`…`$n`
+and `$ARGUMENTS` interpolate arguments.
+**Tools** — `.neo/tools/*.py` loaded automatically.
 
-```markdown
-<!-- .neo/commands/review.md -->
----
-description: review the current diff
-agent: reviewer
----
-Review the diff for $1 and leave findings.
-```
+## Internals
 
-`$1`…`$n` interpolate positional arguments (`$10` means argument ten),
-`$ARGUMENTS` expands to all arguments joined by spaces. Python tools go in
-`.neo/tools/*.py` and are loaded automatically.
-
-## Project layout
+| Area | Notes |
+| --- | --- |
+| Loop | plan → act → verify; parallel tool calls, backoff retries, doom-loop guard, transcript repair, auto-compaction |
+| Tools (18) | `read` `write` `edit` `apply_patch` `glob` `grep` `list_dir` `bash`(+pty) `webfetch` `websearch` `todo_write` `todo_read` `task` `question` `skill` `plan_enter` `plan_exit` `undo` |
+| Providers | 228 in the catalog (OpenAI / Anthropic / Gemini protocols); any OpenAI-compatible `base_url` works |
+| Code intel | LSP diagnostics (pyright, tsserver, gopls, rust-analyzer, eslint) + formatters after every edit |
 
 ```
 src/neo/
-  agent/        autonomous loop, permissions, sessions, plans, compaction
+  agent/        loop, permissions, sessions, plans, compaction
   tools/        18 built-in tools (files, shell+sandbox, web, todos, subagents…)
   providers/    streaming clients + 228-entry provider catalog (JSON)
-  sandbox/      bubblewrap argv builder, capability detection, filtering proxy
-  mcp/          MCP clients (stdio, StreamableHTTP), tool/prompt discovery
+  sandbox/      bubblewrap argv builder, detection, filtering proxy
+  mcp/          clients (stdio, StreamableHTTP), tool/prompt discovery
   lsp/  format/ language servers + formatters wired into every edit
-  vcs/          git snapshots, selective restore, forks, worktrees
+  vcs/          snapshots, selective restore, forks, worktrees
   plugins/      plugin loader and hook dispatch
   custom_tools/ .neo/tools/*.py loader
-  agents/  plan/  agent roster, per-agent toolsets, plan-mode enforcement
+  agents/ plan/ agent roster, per-agent toolsets, plan-mode enforcement
   tui/          Textual interface: palette, dialogs, themes, session list
   auth.py       ~/.config/neo/auth.json key store (0600)
 ```
