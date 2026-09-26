@@ -2,7 +2,7 @@
 
 [![PyPI](https://img.shields.io/pypi/v/neo-agnt)](https://pypi.org/project/neo-agnt/)
 [![Python](https://img.shields.io/badge/python-3.10%2B-blue)](https://www.python.org/downloads/)
-[![Tests](https://img.shields.io/badge/tests-339%20passed-brightgreen)](https://github.com/iiaddy/neo)
+[![Tests](https://img.shields.io/badge/tests-452%20passed-brightgreen)](https://github.com/iiaddy/neo)
 [![License](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 [![Providers](https://img.shields.io/badge/providers-228-orange)](https://github.com/iiaddy/neo)
 
@@ -269,12 +269,12 @@ register their own tools.
 description: review the current diff
 agent: reviewer
 ---
-Review `!git diff --stat` and leave findings on @src/.
+Review the diff for $1 and leave findings.
 ```
 
-`$1`/`$ARGUMENTS` interpolate arguments, `!cmd` runs shell upfront,
-`@path` injects file contents. Python tools go in `.neo/tools/*.py`
-and are loaded automatically.
+`$1`…`$n` interpolate positional arguments (`$10` means argument ten),
+`$ARGUMENTS` expands to all arguments joined by spaces. Python tools go in
+`.neo/tools/*.py` and are loaded automatically.
 
 ## Project layout
 
@@ -288,7 +288,6 @@ src/neo/
   lsp/  format/ language servers + formatters wired into every edit
   vcs/          git snapshots, selective restore, forks, worktrees
   plugins/      plugin loader and hook dispatch
-  commands/     .neo/commands/*.md slash-command engine
   custom_tools/ .neo/tools/*.py loader
   agents/  plan/  agent roster, per-agent toolsets, plan-mode enforcement
   tui/          Textual interface: palette, dialogs, themes, session list
@@ -298,7 +297,7 @@ src/neo/
 ## Tests
 
 ```bash
-python -m pytest          # 339 passed, 4 skipped
+python -m pytest          # 452 passed, 4 skipped
 ```
 
 ## License
