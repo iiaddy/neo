@@ -102,6 +102,25 @@ Permissions are `{tool: {pattern: allow|ask|deny}}`, last match wins. Every
 command in a compound (`a && b`) is evaluated — one deny blocks the whole
 thing. `neo config` prints the fully resolved configuration.
 
+Custom OpenAI-compatible providers are easiest via `/login` → `custom`:
+a wizard collects the provider id, display name, base URL, API key (literal
+or `{env:VAR}`), and model ids with display names, then saves everything to
+`~/.config/neo/neo.json`:
+
+```json
+{ "providers": { "my-proxy": {
+    "title": "My Proxy",
+    "base_url": "https://proxy.internal/v1",
+    "protocol": "openai",
+    "models": ["model-a", "model-b"],
+    "model_names": {"model-a": "Model A"},
+    "default_model": "model-a",
+    "api_key_env": "PROXY_KEY"
+} } }
+```
+
+`/model` then lists those models directly — including their display names.
+
 ## Sandbox
 
 On Linux, `bash` runs in bubblewrap: namespaces, read-only root, filtered

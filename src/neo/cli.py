@@ -335,14 +335,15 @@ def cmd_fork(args) -> int:
 
 
 def cmd_models(args) -> int:
+    from .config import discover_config
     from .providers import list_providers
+    cfg, _ = discover_config()
+    specs = list_providers(cfg)
     if args.provider:
-        specs = [s for s in list_providers() if s.id == args.provider]
+        specs = [s for s in specs if s.id == args.provider]
         if not specs:
             print(f"unknown provider '{args.provider}'", file=sys.stderr)
             return 1
-    else:
-        specs = list_providers()
     for s in specs:
         envs = ",".join(s.env_vars) if s.env_vars else "-"
         print(f"{s.id:18} {s.title:22} {s.protocol:9} default: {s.default_model}")

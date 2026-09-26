@@ -184,3 +184,33 @@ def discover_config(workdir: str | Path = ".") -> tuple[NeoConfig, Path | None]:
 def config_dir() -> Path:
     GLOBAL_CONFIG_DIR.mkdir(parents=True, exist_ok=True)
     return GLOBAL_CONFIG_DIR
+
+
+def save_global_provider(provider_id: str, definition: dict) -> Path:
+    """Merge ``providers.<provider_id>`` into ``~/.config/neo/neo.json``.
+
+    Deep-merges with any existing definition so unrelated settings and
+    sibling providers survive; creates the file (mode 0600, since it may
+    hold secrets) when missing. Returns the path written.
+    """
+    path = config_dir() / CONFIG_FILENAME
+    existed = path.is_file()
+    data: dict = {}
+    if existed:
+        try:
+            raw = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            raw = {}
+        data = raw if isinstance(raw, dict) else {}
+    providers = data.get("providers")
+    if not isinstance(providers, dict):
+        providers = {}
+        data["providers"] = providers
+    existing = providers.get(provider_id)
+    merged = dict(existing) if isinstance(existing, dict) else {}
+    _deep_merge(merged, definition)
+    providers[provider_id] = merged
+    path.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
+    if not existed:
+        os.chmod(path, 0o600)
+    return path

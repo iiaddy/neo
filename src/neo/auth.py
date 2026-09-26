@@ -104,17 +104,25 @@ def resolve_api_key(provider_id: str, config, store: AuthStore | None = None,
     object exposing the same mapping. `env_vars`, when given, are the
     authoritative env names and are checked first; otherwise the catalog's
     env_vars win over the hardcoded map and the sanitized
-    ``{PROVIDER_ID}_API_KEY`` fallback. Returns None when nothing is set.
-    The key is never logged or printed by this function.
+    ``{PROVIDER_ID}_API_KEY`` fallback. An explicit
+    ``providers.<pid>.api_key_env`` names one more environment variable and
+    is checked right after the env names, before the auth store, so an
+    explicit choice beats a stale stored key. Returns None when nothing is
+    set. The key is never logged or printed by this function.
     """
     for name in (tuple(env_vars) if env_vars else _env_names(provider_id)):
         value = os.environ.get(name)
+        if value:
+            return value
+    overrides = (getattr(config, "providers", None) or {}).get(provider_id) or {}
+    api_key_env = overrides.get("api_key_env")
+    if api_key_env:
+        value = os.environ.get(api_key_env)
         if value:
             return value
     store = store if store is not None else AuthStore()
     stored = store.get(provider_id)
     if stored:
         return stored
-    overrides = (getattr(config, "providers", None) or {}).get(provider_id) or {}
     key = overrides.get("api_key")
     return key if key else None

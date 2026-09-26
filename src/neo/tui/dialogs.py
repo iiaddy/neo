@@ -278,3 +278,56 @@ class SecretModal(ModalScreen):
     def on_key(self, event) -> None:
         if event.key == "escape" and not self._future.done():
             self._done(None)
+
+
+class TextModal(ModalScreen):
+    """Single-line unmasked text input. Resolves the future with the
+    stripped string (or ``default`` when the field is left empty and a
+    default was given), or None when dismissed/escaped."""
+
+    def __init__(self, title: str, placeholder: str = "",
+                 default: str = "", future: "asyncio.Future | None" = None) -> None:
+        super().__init__()
+        self._title = title
+        self._placeholder = placeholder
+        self._default = default
+        self._future = future
+
+    def compose(self) -> ComposeResult:
+        with Vertical(classes="modal"):
+            yield Label(self._title, classes="modal-title")
+            yield Input(placeholder=self._placeholder, value=self._default,
+                        id="text-input")
+            with Vertical(classes="modal-btns"):
+                yield Button("Save", id="text-ok", variant="primary")
+                yield Button("Cancel", id="text-cancel")
+
+    def on_mount(self) -> None:
+        widget = self.query_one("#text-input", Input)
+        widget.focus()
+        widget.cursor_position = len(widget.value)
+
+    def _value(self) -> str | None:
+        raw = self.query_one("#text-input", Input).value.strip()
+        return raw if raw else (self._default.strip() or None)
+
+    def _done(self, value: str | None) -> None:
+        if self._future is not None and not self._future.done():
+            self._future.set_result(value)
+        self.dismiss()
+
+    @on(Button.Pressed)
+    def _pressed(self, event: Button.Pressed) -> None:
+        if event.button.id == "text-ok":
+            self._done(self._value())
+        else:
+            self._done(None)
+
+    @on(Input.Submitted)
+    def _submitted(self, event: Input.Submitted) -> None:
+        if event.input.id == "text-input":
+            self._done(self._value())
+
+    def on_key(self, event) -> None:
+        if event.key == "escape" and (self._future is None or not self._future.done()):
+            self._done(None)

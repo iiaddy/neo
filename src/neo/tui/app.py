@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+import re
 from pathlib import Path
 
 from textual.app import App, ComposeResult
@@ -13,7 +14,8 @@ from ..agent.compact import estimate_tokens
 from ..agent.session import SessionStore
 from ..cli import boot_mcp, build_runtime
 from .composer import Composer
-from .dialogs import ChoiceModal, PermissionModal, QuestionModal, SecretModal
+from .dialogs import (ChoiceModal, PermissionModal, QuestionModal, SecretModal,
+                     TextModal)
 from .model_picker import (ModelPicker, load_favorites, load_recents,
                            push_recent)
 from .session_dialog import SessionDialog
@@ -130,6 +132,35 @@ class _UIBridge:
         fut: asyncio.Future = loop.create_future()
         self._app.push_screen(QuestionModal(questions, fut))
         return await fut
+
+
+_CUSTOM_PROVIDER_ID_RE = re.compile(r"^[a-z0-9][a-z0-9-_]*$")
+
+
+def _valid_base_url(value: str) -> bool:
+    """True when value looks like an http(s) base URL (MiMo-Code rule)."""
+    return bool(re.match(r"^https?://[^/\s]", value.strip()))
+
+
+def _model_entries(specs: list) -> tuple[list[str], dict[str, str]]:
+    """Build /model picker entries from provider specs.
+
+    Returns ``(labels, index)`` where each label is ``provider/model`` plus
+    the configured display name when one exists, and ``index`` maps the
+    label back to the canonical ``provider/model`` id.
+    """
+    labels: list[str] = []
+    index: dict[str, str] = {}
+    for spec in specs:
+        ids = list(spec.models) or ([spec.default_model] if spec.default_model else [])
+        for mid in ids:
+            canonical = f"{spec.id}/{mid}"
+            name = (spec.model_names or {}).get(mid, "").strip()
+            label = f"{canonical} — {name}" if name else canonical
+            if label not in index:  # first provider wins on collision
+                labels.append(label)
+                index[label] = canonical
+    return labels, index
 
 
 class NeoApp(App):
@@ -586,31 +617,36 @@ class NeoApp(App):
 
     async def _pick_model(self) -> None:
         from ..providers import list_providers
+        specs = list_providers(self.config)
+        by_id = {p.id: p for p in specs}
         provider_id = self._active_provider_id()
-        if provider_id is None:
-            # No active provider: let the user pick one first.
-            provider_id = await self._pick_provider("model — select provider")
-            if not provider_id:
-                return
-        specs = {p.id: p for p in list_providers()}
-        spec = specs.get(provider_id)
-        if spec is None:
-            self._notice(f"unknown provider '{provider_id}'.", "error")
-            return
-        ids = list(spec.models) or ([spec.default_model] if spec.default_model else [])
-        models = [f"{provider_id}/{m}" for m in ids]
-        if not models:
-            self._notice(f"provider '{provider_id}' has no models listed.", "warn")
+        spec = by_id.get(provider_id) if provider_id else None
+        title = "model"
+        if spec is not None:
+            labels, index = _model_entries([spec])
+            if labels:
+                title = f"model — {spec.title}"
+        else:
+            labels, index = [], {}
+        if not labels:
+            # Ambiguous provider, or the active one lists no models:
+            # show every provider/model pair instead of a provider-name
+            # dead end.
+            labels, index = _model_entries(specs)
+            title = "model — all providers"
+        if not labels:
+            self._notice("no models available.", "warn")
             return
         loop = asyncio.get_running_loop()
         fut: asyncio.Future = loop.create_future()
-        self.push_screen(ModelPicker(models, favorites=load_favorites(),
+        self.push_screen(ModelPicker(labels, favorites=load_favorites(),
                                      recents=load_recents(), future=fut,
-                                     title=f"model — {spec.title}"))
+                                     title=title))
         picked = await fut
-        if picked and self._harness:
-            push_recent(picked)
-            self.config.model = picked
+        canonical = index.get(picked) if picked else None
+        if canonical and self._harness:
+            push_recent(canonical)
+            self.config.model = canonical
             await self._rebuild_runtime()
             self._notice(f"model → {self.config.model}", "info")
 
@@ -622,7 +658,7 @@ class NeoApp(App):
         """
         from ..auth import AuthStore
         from ..providers import list_providers
-        ids = {p.id for p in list_providers()}
+        ids = {p.id for p in list_providers(self.config)}
         model = (self.config.model or "").strip()
         if "/" in model:
             pid = model.split("/", 1)[0]
@@ -640,7 +676,7 @@ class NeoApp(App):
                              only: list[str] | None = None) -> str | None:
         """Searchable provider picker. Resolves the provider id or None."""
         from ..providers import list_providers
-        specs = list_providers()
+        specs = list_providers(self.config)
         if only is not None:
             keep = set(only)
             specs = [p for p in specs if p.id in keep]
@@ -659,12 +695,170 @@ class NeoApp(App):
         self.push_screen(SecretModal(title, placeholder, fut))
         return await fut
 
+    async def _prompt_text(self, title: str, placeholder: str = "",
+                           default: str = "") -> str | None:
+        loop = asyncio.get_running_loop()
+        fut: asyncio.Future = loop.create_future()
+        self.push_screen(TextModal(title, placeholder, default, fut))
+        return await fut
+
+    async def _setup_custom_provider(self) -> None:
+        """MiMo-Code-style custom provider wizard.
+
+        Collects provider id, display name, base URL, API key (literal or
+        ``{env:VAR}``), and one or more models (id + display name each),
+        then persists the definition to ``~/.config/neo/neo.json`` and
+        makes it the active provider.
+        """
+        from ..auth import AuthStore
+        from ..config import save_global_provider
+        from ..providers import list_providers
+
+        catalog_ids = {p.id for p in list_providers()}
+        cancelled = "custom provider setup cancelled."
+
+        while True:
+            pid = await self._prompt_text(
+                "Custom provider — id",
+                "lowercase letters, digits, - and _ (e.g. my-proxy)",
+                default="custom")
+            if pid is None:
+                self._notice(cancelled, "warn")
+                return
+            pid = pid.strip()
+            if not _CUSTOM_PROVIDER_ID_RE.match(pid):
+                self._notice("id must match ^[a-z0-9][a-z0-9-_]*$.", "error")
+                continue
+            if pid in catalog_ids and pid != "custom":
+                self._notice(f"provider '{pid}' already exists.", "error")
+                continue
+            break
+
+        name = await self._prompt_text(
+            "Custom provider — display name", "shown in pickers", default=pid)
+        if name is None:
+            self._notice(cancelled, "warn")
+            return
+
+        while True:
+            base_url = await self._prompt_text(
+                "Custom provider — base URL", "https://your-proxy/v1")
+            if base_url is None:
+                self._notice(cancelled, "warn")
+                return
+            base_url = base_url.strip().rstrip("/")
+            if not _valid_base_url(base_url):
+                self._notice("base URL must start with http:// or https://.",
+                             "error")
+                continue
+            break
+
+        key = await self._prompt_secret(
+            f"API key for {pid}",
+            "paste key, {env:VAR}, or Cancel for none")
+        api_key_env: str | None = None
+        if key is None:
+            keep_going = await self._prompt_text(
+                "No key entered — continue without an API key?",
+                "y / n", default="n")
+            if (keep_going or "n").strip().lower() not in ("y", "yes"):
+                self._notice(cancelled, "warn")
+                return
+            key = ""
+        else:
+            env_ref = re.fullmatch(r"\{env:([^}]+)\}", key.strip())
+            if env_ref:
+                api_key_env = env_ref.group(1).strip()
+                if not api_key_env:
+                    self._notice("empty {env:} reference.", "error")
+                    return
+                key = ""
+
+        models: list[str] = []
+        model_names: dict[str, str] = {}
+        while True:
+            mid = await self._prompt_text(
+                f"Custom provider — model id ({len(models) + 1})",
+                "e.g. gemini-2.5-pro (empty finishes)")
+            if mid is None:
+                self._notice(cancelled, "warn")
+                return
+            mid = mid.strip()
+            if not mid:
+                if models:
+                    break
+                self._notice("at least one model is required.", "error")
+                continue
+            if mid in models:
+                self._notice("duplicate model id.", "error")
+                continue
+            mname = await self._prompt_text(
+                "Model display name", "shown in /model", default=mid)
+            if mname is None:
+                self._notice(cancelled, "warn")
+                return
+            mname = mname.strip()
+            models.append(mid)
+            if mname and mname != mid:
+                model_names[mid] = mname
+            more = await self._prompt_text("Add another model?", "y / n",
+                                           default="n")
+            if (more or "n").strip().lower() not in ("y", "yes"):
+                break
+
+        definition: dict = {
+            "title": name.strip() or pid,
+            "base_url": base_url,
+            "protocol": "openai",
+            "models": models,
+            "default_model": models[0],
+        }
+        if model_names:
+            definition["model_names"] = model_names
+        if api_key_env:
+            definition["api_key_env"] = api_key_env
+        save_global_provider(pid, definition)
+        # In-memory too, so the pickers see it without a restart.
+        if getattr(self.config, "providers", None) is None:
+            self.config.providers = {}
+        self.config.providers[pid] = definition
+        if key:
+            AuthStore().set(pid, key)
+        self.config.model = f"{pid}/{models[0]}"
+        await self._rebuild_runtime()
+        self._notice(f"custom provider '{pid}' saved — model → {self.config.model}",
+                     "info")
+
     async def _login(self) -> None:
         from ..auth import AuthStore
+        from ..config import save_global_provider
         from ..providers import list_providers
         provider_id = await self._pick_provider("login — select provider")
         if not provider_id:
             return
+        if provider_id == "custom":
+            # Full setup: id, name, base URL, key, models (MiMo-Code-style).
+            await self._setup_custom_provider()
+            return
+        specs = {p.id: p for p in list_providers(self.config)}
+        spec = specs.get(provider_id)
+        cfg_providers = getattr(self.config, "providers", None) or {}
+        have_base = ((cfg_providers.get(provider_id) or {}).get("base_url")
+                     or (spec.base_url if spec else ""))
+        if not have_base:
+            # Blank-base_url catalog providers (azure, bedrock, ...): the
+            # deployment URL is per-user, so ask once and persist it.
+            base_url = await self._prompt_text(
+                f"Base URL for {provider_id}", "https://...")
+            if base_url is None or not _valid_base_url(base_url):
+                self._notice("login cancelled — a valid base URL is required.",
+                             "warn")
+                return
+            base_url = base_url.strip().rstrip("/")
+            save_global_provider(provider_id, {"base_url": base_url})
+            if getattr(self.config, "providers", None) is None:
+                self.config.providers = {}
+            self.config.providers.setdefault(provider_id, {})["base_url"] = base_url
         key = await self._prompt_secret(
             f"API key for {provider_id}",
             "paste key — stored in ~/.config/neo/auth.json (0600)")
@@ -674,8 +868,6 @@ class NeoApp(App):
         AuthStore().set(provider_id, key)
         # The logged-in provider becomes the active one, OpenCode-style,
         # so /model immediately lists its models.
-        specs = {p.id: p for p in list_providers()}
-        spec = specs.get(provider_id)
         default = spec.default_model if spec else ""
         self.config.model = (f"{provider_id}/{default}"
                              if default else provider_id)

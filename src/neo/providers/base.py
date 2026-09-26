@@ -46,6 +46,7 @@ class ProviderSpec:
     env_vars: tuple[str, ...]  # tried in order
     default_model: str
     models: tuple[str, ...] = ()  # full model id list for /model pickers
+    model_names: dict[str, str] = field(default_factory=dict)  # model id -> display name
     extra_headers: dict[str, str] = field(default_factory=dict)
 
 
