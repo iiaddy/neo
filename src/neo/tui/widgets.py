@@ -177,6 +177,81 @@ class VerifyRow(Static):
 
 
 # ---------------------------------------------------------------------------
+# Working indicator
+# ---------------------------------------------------------------------------
+
+class WorkingIndicator(Horizontal):
+    """Prominent animated 'neo is working' bar, pinned above the status bar.
+
+    Visible for the whole turn: spinner + phase + elapsed seconds. The
+    phase tracks what the agent is doing — thinking, writing, tool names —
+    so a turn with no model output yet still feels alive. The animated
+    ellipsis (thinking → thinking. → thinking.. → thinking...) is the
+    "thinking animation".
+    """
+
+    def __init__(self) -> None:
+        super().__init__(classes="working")
+        self._label: Label | None = None
+        self._frames = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
+        self._fi = 0
+        self._dots = 0
+        self._phase = "thinking"
+        self._started = 0.0
+        self._timer = None
+        self.display = False
+        self._text = ""  # last painted line (handy for tests)
+
+    def compose(self):
+        self._label = Label("", classes="working-label")
+        yield self._label
+
+    def on_mount(self) -> None:
+        self._timer = self.set_interval(0.1, self._tick)
+
+    async def on_unmount(self) -> None:
+        try:
+            self._timer.stop()
+        except Exception:
+            pass
+
+    def start(self, phase: str = "thinking") -> None:
+        """Show the indicator and restart the elapsed timer."""
+        self._phase = phase
+        self._started = time.monotonic()
+        self._fi = 0
+        self._dots = 0
+        self.display = True
+        self._paint()
+
+    def set_phase(self, phase: str) -> None:
+        self._phase = phase
+        self._paint()
+
+    def stop(self) -> None:
+        self.display = False
+
+    @property
+    def elapsed(self) -> int:
+        return int(time.monotonic() - self._started) if self._started else 0
+
+    def _tick(self) -> None:
+        if not self.display:
+            return
+        self._fi = (self._fi + 1) % len(self._frames)
+        self._dots = (self._dots + 1) % 4
+        self._paint()
+
+    def _paint(self) -> None:
+        if self._label is None:
+            return
+        dots = "." * self._dots
+        self._text = (f"{self._frames[self._fi]} {self._phase}{dots} "
+                      f"· {self.elapsed}s")
+        self._label.update(self._text)
+
+
+# ---------------------------------------------------------------------------
 # Status bar
 # ---------------------------------------------------------------------------
 

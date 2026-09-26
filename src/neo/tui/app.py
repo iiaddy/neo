@@ -21,7 +21,8 @@ from .model_picker import (ModelPicker, load_favorites, load_recents,
 from .session_dialog import SessionDialog
 from .themes import THEMES
 from .widgets import (AssistantMessage, NoticeLine, ReasoningBlock, Sidebar,
-                      StatusBar, ToolRow, UserMessage, VerifyRow)
+                      StatusBar, ToolRow, UserMessage, VerifyRow,
+                      WorkingIndicator)
 
 CSS = """
 Screen { background: $background; }
@@ -35,14 +36,20 @@ Screen { background: $background; }
 #main { height: 1fr; }
 #transcript {
     width: 1fr; height: 1fr;
-    padding: 0 1;
+    padding: 0 2;
     overflow-y: auto;
     scrollbar-size: 1 1;
 }
 #transcript:focus { border: none; }
 
-.user-msg { border-left: solid $accent; padding-left: 1; margin-top: 1; height: auto; }
-.assistant-msg { margin-top: 1; height: auto; }
+.user-msg {
+    border-left: solid $accent;
+    padding-left: 1; margin: 1 0 0 0; height: auto;
+}
+.assistant-msg {
+    border-left: solid $surface;
+    padding-left: 1; margin: 1 0 0 0; height: auto;
+}
 
 .reasoning { margin-left: 1; border-left: solid $text-muted; padding-left: 1; }
 .reasoning-body { color: $text-muted; }
@@ -62,6 +69,13 @@ Screen { background: $background; }
     max-height: 20; overflow-y: auto;
 }
 
+.working {
+    height: 1; width: 1fr;
+    background: $surface;
+    padding: 0 1;
+}
+.working-label { color: $accent; }
+
 .sidebar {
     width: 32; height: 1fr;
     background: $surface; border-left: solid $surface;
@@ -73,16 +87,18 @@ Screen { background: $background; }
 .statusbar {
     height: 1; width: 1fr;
     background: $surface;
+    border-top: solid $background;
 }
 .status-left { width: 1fr; color: $text-muted; padding: 0 1; }
 .status-right { width: auto; color: $text-muted; padding: 0 1; }
 
-.composer { height: auto; }
+.composer { height: auto; margin-top: 1; }
 .prompt-input {
-    border: solid $surface; background: $surface;
+    border: round $surface; background: $surface;
     margin: 0 1 1 1;
+    padding: 0 1;
 }
-.prompt-input:focus { border: solid $accent; }
+.prompt-input:focus { border: round $accent; }
 .suggest {
     max-height: 8; margin: 0 1;
     background: $panel; border: solid $surface;
@@ -197,6 +213,7 @@ class NeoApp(App):
         self._pump: asyncio.Task | None = None
         self._transcript: Vertical | None = None
         self._status: StatusBar | None = None
+        self._working: WorkingIndicator | None = None
         self._sidebar: Sidebar | None = None
         self._composer: Composer | None = None
         self._assistant: AssistantMessage | None = None
@@ -221,6 +238,8 @@ class NeoApp(App):
             yield self._sidebar
         self._status = StatusBar()
         yield self._status
+        self._working = WorkingIndicator()
+        yield self._working
         self._composer = Composer(
             on_submit=self._on_submit,
             get_commands=self._slash_commands,
@@ -290,8 +309,17 @@ class NeoApp(App):
 
     def _refresh_topbar(self) -> None:
         try:
+            from rich.text import Text
             bar = self.query_one("#topbar", Static)
-            bar.update(f"neo   {self._model_label}   {self.workdir.name}")
+            tv = self.theme_variables or {}
+            accent = tv.get("primary", "#7aa2f7")
+            muted = tv.get("text-muted", "#8b8b8b")
+            t = Text()
+            t.append("neo", style=f"bold {accent}")
+            if self._model_label:
+                t.append(f"  ·  {self._model_label}", style=muted)
+            t.append(f"  ·  {self.workdir.name}", style=muted)
+            bar.update(t)
         except Exception:
             pass
         # Keep the bottom status bar's model readout in sync too — it was
@@ -308,9 +336,13 @@ class NeoApp(App):
         self.push_screen(PermissionModal(tool, target, detail, fut))
         if self._status:
             self._status.set_phase("waiting for approval")
+        if self._working:
+            self._working.set_phase("waiting for approval")
         choice = await fut
         if self._status and self._turn_running:
             self._status.set_phase("working")
+        if self._working and self._turn_running:
+            self._working.set_phase("working")
         return choice
 
     # -- tool emit (sync callback from tools, same event loop) -------------
@@ -322,6 +354,8 @@ class NeoApp(App):
                 self._sidebar.set_todos(list(event.todos))
         elif kind == "tool_progress" and self._status:
             self._status.set_phase(f"{event.tool}…")
+            if self._working:
+                self._working.set_phase(event.tool)
 
     # -- submit / run pump --------------------------------------------------
 
@@ -349,6 +383,8 @@ class NeoApp(App):
         self._turn_running = True
         if self._status:
             self._status.set_busy(True, "working")
+        if self._working:
+            self._working.start("thinking")
         self._pump = asyncio.create_task(self._pump_events())
 
     async def _pump_events(self) -> None:
@@ -378,6 +414,8 @@ class NeoApp(App):
             self._turn_running = False
             if self._status:
                 self._status.set_busy(False)
+            if self._working:
+                self._working.stop()
             self._update_context_gauge()
             if self._composer:
                 self._composer.focus_input()
@@ -394,10 +432,14 @@ class NeoApp(App):
         if k == "turn_start":
             if self._status:
                 self._status.set_phase(f"turn {ev.index + 1}")
+            if self._working:
+                self._working.set_phase("thinking")
         elif k == "text_start":
             self._assistant = AssistantMessage()
             self._transcript.mount(self._assistant)
             self._scroll_follow()
+            if self._working:
+                self._working.set_phase("writing")
         elif k == "text_delta":
             if self._assistant:
                 self._assistant.append_text(ev.text)
@@ -410,6 +452,8 @@ class NeoApp(App):
             self._reasoning = ReasoningBlock()
             self._reason_buf = []
             self._transcript.mount(self._reasoning)
+            if self._working:
+                self._working.set_phase("thinking")
         elif k == "reason_delta":
             self._reason_buf.append(ev.text)
             if self._reasoning:
@@ -426,10 +470,14 @@ class NeoApp(App):
             self._scroll_follow()
             if self._status:
                 self._status.set_phase(f"{ev.tool}…")
+            if self._working:
+                self._working.set_phase(ev.tool)
         elif k == "tool_end":
             row = self._tool_rows.pop(ev.call_id, None)
             if row:
                 row.finish(ev.ok, ev.output, ev.ms)
+            if self._working:
+                self._working.set_phase("working")
         elif k == "usage":
             self._in_tokens = ev.input_tokens
             self._out_tokens = ev.output_tokens
