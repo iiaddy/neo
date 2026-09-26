@@ -40,6 +40,30 @@ Be specific and concrete. Cover:
 Keep it under 800 words."""
 
 
+MEMORY_SYSTEM = """## Memory
+You have long-term memory across sessions, stored as plain markdown files:
+- Project memory: `<project>/MEMORY.md` (or `<project>/.neo/MEMORY.md`) —
+  facts about this project: conventions, decisions, gotchas, things the user
+  told you to remember here.
+- Global memory: `~/.config/neo/MEMORY.md` — facts about the user that apply
+  everywhere: name, preferences, tools they use, things they always want.
+
+What you remembered is injected below under "Long-term memory" at the start
+of every session. Keep it working:
+- When the user tells you a durable fact ("remember that I prefer…",
+  "from now on always…", "my X is Y"), append it to the right MEMORY.md
+  with the `write`/`edit` tools. Project-specific → project file;
+  user-level → global file.
+- Also record durable project facts you discover yourself (build commands,
+  repo conventions, recurring gotchas) in the project MEMORY.md.
+- Keep entries short, one fact per line or bullet. Never store secrets,
+  tokens, or passwords — note that they exist and where, never the value.
+- Don't ask permission to remember; just do it and mention it briefly.
+- Memory files are yours to maintain: prune entries that are stale or
+  contradicted.
+"""
+
+
 def _git_root(start: Path) -> Path | None:
     node = start.resolve()
     while True:
@@ -89,10 +113,50 @@ def load_project_notes(workdir: str | Path) -> list[tuple[str, str]]:
     return notes
 
 
+def load_memory(workdir: str | Path) -> list[tuple[str, str]]:
+    """Collect MEMORY.md long-term memory files.
+
+    Same walk as load_project_notes: from the git root (or workdir) down to
+    cwd, then the global file. These hold durable facts the agent recorded in
+    earlier sessions — user preferences, project conventions, decisions.
+    """
+    workdir = Path(workdir).resolve()
+    root = _git_root(workdir) or workdir
+    notes: list[tuple[str, str]] = []
+    seen: set[str] = set()
+
+    def take(path: Path):
+        key = str(path.resolve())
+        if key in seen or not path.is_file():
+            return
+        try:
+            content = path.read_text(encoding="utf-8")
+        except OSError:
+            return
+        if content.strip():
+            seen.add(key)
+            notes.append((str(path), content))
+
+    node = root
+    ups = []
+    n = workdir
+    while True:
+        ups.append(n)
+        if n == root or n.parent == n:
+            break
+        n = n.parent
+    for d in reversed(ups):
+        for name in ("MEMORY.md", ".neo/MEMORY.md"):
+            take(d / name)
+    take(Path.home() / ".config" / "neo" / "MEMORY.md")
+    return notes
+
+
 def build_system_prompt(*, tools: dict, project_notes: list[tuple[str, str]],
+                        memory_notes: list[tuple[str, str]] | None = None,
                         skills_index: str = "", extra: str = "",
                         mcp_instructions: str = "") -> str:
-    parts = [NEO_SYSTEM_BASE]
+    parts = [NEO_SYSTEM_BASE, MEMORY_SYSTEM]
     parts.append("## Environment\n"
                  f"- Working directory: {os.getcwd()}\n"
                  f"- Date: {datetime.date.today().isoformat()}\n"
@@ -106,6 +170,8 @@ def build_system_prompt(*, tools: dict, project_notes: list[tuple[str, str]],
         parts.append("\n".join(lines))
     for path, content in project_notes:
         parts.append(f"## Project notes ({path})\n{content.strip()}")
+    for path, content in (memory_notes or []):
+        parts.append(f"## Long-term memory ({path})\n{content.strip()}")
     if skills_index:
         parts.append(f"## Available skills\n{skills_index}\n"
                      "Load a skill with the `skill` tool when its expertise applies.")

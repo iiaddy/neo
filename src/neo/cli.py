@@ -19,7 +19,7 @@ def build_runtime(workdir: str | Path, config: NeoConfig,
     from .agent.discovery import find_agents, find_commands, find_skills
     from .agent.loop import AgentHarness
     from .agent.permissions import PermissionPolicy
-    from .agent.prompts import build_system_prompt, load_project_notes
+    from .agent.prompts import build_system_prompt, load_memory, load_project_notes
     from .providers import resolve_provider
     from .tools import build_toolset
     from .tools.base import ToolContext
@@ -57,9 +57,11 @@ def build_runtime(workdir: str | Path, config: NeoConfig,
     tools = toolset_for(_agent_name, tools, _agents)
 
     notes = load_project_notes(workdir)
+    memory = load_memory(workdir)
     skills_index = "\n".join(f"- {n}: {s.description or 'no description'}"
                              for n, s in sorted(skills.items()))
     system = build_system_prompt(tools=tools, project_notes=notes,
+                                 memory_notes=memory,
                                  skills_index=skills_index)
     _agent_system = (_agent_def.get("system") or "").strip()
     if _agent_system:

@@ -37,9 +37,16 @@ class AssistantMessage(Vertical):
         self._last_flush = 0.0
         self._md: Markdown | None = None
         self._done = False
+        # finish() may run before compose() (fast event bursts); the final
+        # text is stashed here so compose() can apply it.
+        self._final: str | None = None
 
     def compose(self):
-        self._md = Markdown("", classes="assistant-msg-body")
+        # NOTE: never call self._md.update() here. Markdown._on_mount
+        # re-applies the constructor text, which would clobber any update
+        # made during compose. Pending text goes through the constructor.
+        pending = self._final if self._final is not None else "".join(self._buf)
+        self._md = Markdown(pending, classes="assistant-msg-body")
         yield self._md
 
     def append_text(self, text: str) -> None:
@@ -60,8 +67,9 @@ class AssistantMessage(Vertical):
 
     def finish(self, text: str) -> None:
         self._done = True
+        self._final = text or "…"
         if self._md is not None:
-            self._md.update(text or "…")
+            self._md.update(self._final)
 
 
 class ReasoningBlock(Collapsible):

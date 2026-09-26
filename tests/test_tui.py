@@ -507,3 +507,79 @@ async def test_submit_starts_turn_not_queued(tmp_path, monkeypatch):
         assert app._turn_running is False
         assert [m.get("role") for m in app.messages] == ["user", "assistant"]
         assert app.messages[1]["content"] == "hello from fake"
+
+
+@pytest.mark.asyncio
+async def test_transcript_scroll_keys(tmp_path, monkeypatch):
+    """pageup/pagedown/shift+arrows must scroll the transcript even though
+    the composer input keeps focus (plain arrows never reach it)."""
+    monkeypatch.setenv("HOME", str(tmp_path))
+    (tmp_path / "work").mkdir()
+
+    from textual.widgets import Static
+
+    from neo.config import discover_config
+    from neo.tui.app import NeoApp
+
+    cfg, _ = discover_config(str(tmp_path / "work"))
+    app = NeoApp(workdir=str(tmp_path / "work"), config=cfg)
+    async with app.run_test(size=(80, 20)) as pilot:
+        await pilot.pause(0.5)
+        t = app._transcript
+        for i in range(40):
+            await t.mount(Static(f"line {i}"))
+        await pilot.pause(0.5)
+        assert t.max_scroll_y > 0
+        t.scroll_end(animate=False)
+        await pilot.pause(0.2)
+        bottom = t.scroll_y
+        assert bottom > 0
+
+        await pilot.press("pageup")
+        await pilot.pause(0.3)
+        assert t.scroll_y < bottom, "pageup must move the transcript up"
+
+        await pilot.press("shift+down")
+        await pilot.pause(0.3)
+        assert t.scroll_y > 0, "shift+down must move the transcript down"
+
+        # smart follow: no yank while the user reads history...
+        t.scroll_home(animate=False)
+        await pilot.pause(0.2)
+        app._scroll_follow()
+        await pilot.pause(0.2)
+        assert t.scroll_y == 0
+        # ...but it pins to bottom when already near it
+        t.scroll_end(animate=False)
+        await pilot.pause(0.2)
+        app._scroll_follow()
+        await pilot.pause(0.2)
+        assert t.scroll_y >= t.max_scroll_y - 3
+
+
+@pytest.mark.asyncio
+async def test_assistant_message_finish_before_compose(tmp_path, monkeypatch):
+    """Regression: with a fast event burst, text_end -> finish() can run
+    before the widget's compose() sets up the Markdown child. The final
+    text must not be silently dropped."""
+    monkeypatch.setenv("HOME", str(tmp_path))
+    (tmp_path / "work").mkdir()
+
+    from textual.widgets import Markdown
+
+    from neo.config import discover_config
+    from neo.tui.app import NeoApp
+    from neo.tui.widgets import AssistantMessage
+
+    cfg, _ = discover_config(str(tmp_path / "work"))
+    app = NeoApp(workdir=str(tmp_path / "work"), config=cfg)
+    async with app.run_test(size=(80, 20)) as pilot:
+        await pilot.pause(0.5)
+        am = AssistantMessage()
+        # mount without awaiting: compose() hasn't run yet
+        app._transcript.mount(am)
+        am.append_text("burst text")
+        am.finish("burst text")
+        await pilot.pause(1.0)
+        md = am.query_one(Markdown)
+        assert "burst text" in md._markdown

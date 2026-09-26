@@ -36,6 +36,7 @@ Screen { background: $background; }
 #transcript {
     width: 1fr; height: 1fr;
     padding: 0 1;
+    overflow-y: auto;
     scrollbar-size: 1 1;
 }
 #transcript:focus { border: none; }
@@ -171,6 +172,10 @@ class NeoApp(App):
         ("ctrl+c", "cancel_run", "Cancel run"),
         ("ctrl+b", "toggle_sidebar", "Sidebar"),
         ("ctrl+l", "clear_transcript", "Clear view"),
+        ("pageup", "scroll_page_up", "Scroll up"),
+        ("pagedown", "scroll_page_down", "Scroll down"),
+        ("shift+up", "scroll_line_up", "Scroll line up"),
+        ("shift+down", "scroll_line_down", "Scroll line down"),
     ]
 
     def __init__(self, workdir: str | Path, config, resume: str | None = None,
@@ -392,11 +397,11 @@ class NeoApp(App):
         elif k == "text_start":
             self._assistant = AssistantMessage()
             self._transcript.mount(self._assistant)
-            self._transcript.scroll_end(animate=False)
+            self._scroll_follow()
         elif k == "text_delta":
             if self._assistant:
                 self._assistant.append_text(ev.text)
-                self._transcript.scroll_end(animate=False)
+                self._scroll_follow()
         elif k == "text_end":
             if self._assistant:
                 self._assistant.finish(ev.text)
@@ -418,7 +423,7 @@ class NeoApp(App):
             row = ToolRow(ev.tool, ev.title or ev.tool)
             self._tool_rows[ev.call_id] = row
             self._transcript.mount(row)
-            self._transcript.scroll_end(animate=False)
+            self._scroll_follow()
             if self._status:
                 self._status.set_phase(f"{ev.tool}…")
         elif k == "tool_end":
@@ -450,12 +455,12 @@ class NeoApp(App):
         elif k == "run_end":
             if ev.reason != "done":
                 self._notice(f"run ended: {ev.reason}", "warn")
-        self._transcript.scroll_end(animate=False)
+        self._scroll_follow()
 
     def _notice(self, text: str, level: str = "info") -> None:
         if self._transcript:
             self._transcript.mount(NoticeLine(text, level))
-            self._transcript.scroll_end(animate=False)
+            self._scroll_follow()
 
     def _update_context_gauge(self) -> None:
         if not self._status or not self._harness:
@@ -522,6 +527,7 @@ class NeoApp(App):
             ("new", "start a new session"),
             ("clear", "clear the transcript view"),
             ("init", "scaffold AGENTS.md"),
+            ("memory", "show long-term memory files"),
             ("plan", "enter plan mode for a goal"),
             ("todos", "show todo list"),
             ("exit", "quit neo"),
@@ -569,6 +575,24 @@ class NeoApp(App):
             from ..cli import cmd_init
             cmd_init(Namespace(global_=False, force=False))
             self._notice(".neo/ scaffolded.", "info")
+        elif name == "memory":
+            from ..agent.prompts import load_memory
+            mems = load_memory(self.workdir)
+            if not mems:
+                self._notice(
+                    "no memory files yet. Tell me something to remember\n"
+                    "(\"remember that I prefer…\") and I'll write it to\n"
+                    f"{Path.home() / '.config' / 'neo' / 'MEMORY.md'}\n"
+                    "or ./MEMORY.md for project facts.", "info")
+            else:
+                lines = []
+                for path, content in mems:
+                    preview = content.strip().splitlines()
+                    shown = "\n".join(f"  {ln}" for ln in preview[:12])
+                    if len(preview) > 12:
+                        shown += f"\n  … ({len(preview) - 12} more lines)"
+                    lines.append(f"{path}\n{shown}")
+                self._notice("long-term memory:\n\n" + "\n\n".join(lines), "info")
         elif name == "plan":
             if not argstr.strip():
                 self._notice("usage: /plan <goal>", "warn")
@@ -986,6 +1010,37 @@ class NeoApp(App):
             self._harness.cancel()
         elif self._composer:
             self._composer.clear()
+
+    # -- transcript scrolling ---------------------------------------------------
+    # The composer input keeps focus, so plain arrow keys never reach the
+    # transcript: these app-level bindings (plus the mouse wheel) are the
+    # way to move through chat history.
+
+    def _scroll_follow(self) -> None:
+        """Pin to bottom only if the user is already near it.
+
+        Lets the user read history mid-stream without being yanked down
+        by every new token.
+        """
+        t = self._transcript
+        if t is not None and t.scroll_y >= t.max_scroll_y - 3:
+            t.scroll_end(animate=False)
+
+    def action_scroll_page_up(self) -> None:
+        if self._transcript:
+            self._transcript.scroll_page_up(animate=False)
+
+    def action_scroll_page_down(self) -> None:
+        if self._transcript:
+            self._transcript.scroll_page_down(animate=False)
+
+    def action_scroll_line_up(self) -> None:
+        if self._transcript:
+            self._transcript.scroll_up(animate=False)
+
+    def action_scroll_line_down(self) -> None:
+        if self._transcript:
+            self._transcript.scroll_down(animate=False)
 
     async def action_toggle_sidebar(self) -> None:
         if self._sidebar:

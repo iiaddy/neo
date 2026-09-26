@@ -185,3 +185,41 @@ def test_cli_init(tmp_path, monkeypatch):
     assert cmd_init(args) == 0
     assert (tmp_path / ".neo" / "AGENTS.md").is_file()
     assert (tmp_path / ".neo" / "skills" / "code-review" / "SKILL.md").is_file()
+
+
+def test_memory_prompt_assembly():
+    from neo.agent.prompts import build_system_prompt, load_memory
+    sys_prompt = build_system_prompt(
+        tools={},
+        project_notes=[],
+        memory_notes=[("/x/MEMORY.md", "user prefers tabs")],
+    )
+    assert "## Memory" in sys_prompt
+    assert "## Long-term memory (/x/MEMORY.md)" in sys_prompt
+    assert "user prefers tabs" in sys_prompt
+    # no memory -> no memory section, but the how-to-remember guide stays
+    plain = build_system_prompt(tools={}, project_notes=[])
+    assert "## Long-term memory" not in plain
+    assert "## Memory" in plain
+
+
+def test_load_memory_project_and_global(tmp_path, monkeypatch):
+    from neo.agent.prompts import load_memory
+    monkeypatch.setenv("HOME", str(tmp_path))
+    proj = tmp_path / "proj"
+    proj.mkdir()
+    (proj / "MEMORY.md").write_text("project fact", encoding="utf-8")
+    gdir = tmp_path / ".config" / "neo"
+    gdir.mkdir(parents=True)
+    (gdir / "MEMORY.md").write_text("global fact", encoding="utf-8")
+    mems = load_memory(proj)
+    paths = [p for p, _ in mems]
+    assert any(str(proj / "MEMORY.md") == p for p in paths)
+    assert any(str(gdir / "MEMORY.md") == p for p in paths)
+    assert "project fact" in mems[0][1] or "project fact" in mems[1][1]
+
+
+def test_load_memory_missing_is_empty(tmp_path, monkeypatch):
+    from neo.agent.prompts import load_memory
+    monkeypatch.setenv("HOME", str(tmp_path))
+    assert load_memory(tmp_path / "empty") == []
