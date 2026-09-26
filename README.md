@@ -39,6 +39,14 @@ pipx upgrade neo-agnt
 pip install --upgrade neo-agnt
 ```
 
+If the upgrade still shows the old version (stale pip cache), reinstall
+bypassing the cache:
+
+```bash
+pipx uninstall neo-agnt
+pipx install --pip-args="--no-cache-dir --index-url https://pypi.org/simple" neo-agnt
+```
+
 Sandboxed `bash` needs bubblewrap on Linux:
 
 ```bash
