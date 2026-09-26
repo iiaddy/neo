@@ -9,7 +9,11 @@ class InquiryTool(Tool):
     name = "question"
     description = (
         "Ask the user a structured question with labeled options. "
-        "Requires an interactive UI; fails without one."
+        "Requires an interactive UI; fails without one. "
+        "Usage: ask mid-execution when a choice blocks progress — "
+        "preferences, ambiguities, implementation tradeoffs. Put your "
+        "recommended option first and mark it (Recommended). Don't guess "
+        "when the user's intent is unclear."
     )
     parameters = {
         "type": "object",

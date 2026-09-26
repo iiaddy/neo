@@ -190,8 +190,8 @@ class AgentHarness:
         system = self.system
         schemas: list[dict] = []
         if disable_tools:
-            system += ("\n\n[SYSTEM REMINDER: your step budget is exhausted. "
-                       "Do NOT call any tools. Answer in text only.]")
+            from .prompts import MAX_STEPS_PROMPT
+            system += "\n\n" + MAX_STEPS_PROMPT
         else:
             schemas = self._tool_schemas()
 
