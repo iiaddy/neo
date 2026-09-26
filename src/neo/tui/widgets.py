@@ -236,6 +236,11 @@ class StatusBar(Horizontal):
             self._model = model
         self._paint()
 
+    def set_model(self, model: str) -> None:
+        """Update the model readout immediately (e.g. after /model switch)."""
+        self._model = model
+        self._paint()
+
     def _paint(self) -> None:
         if self._left is None or self._right is None:
             return

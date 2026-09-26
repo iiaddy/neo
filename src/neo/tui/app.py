@@ -289,6 +289,11 @@ class NeoApp(App):
             bar.update(f"neo   {self._model_label}   {self.workdir.name}")
         except Exception:
             pass
+        # Keep the bottom status bar's model readout in sync too — it was
+        # previously only refreshed on usage events, so /model appeared to
+        # do nothing even though the runtime had switched.
+        if self._status:
+            self._status.set_model(self._model_label)
 
     # -- permission gate ---------------------------------------------------
 

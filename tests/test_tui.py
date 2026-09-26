@@ -413,3 +413,33 @@ def test_active_provider_id_after_login_model():
 
     stub = SimpleNamespace(config=SimpleNamespace(model="groq/llama-3.3-70b-versatile"))
     assert NeoApp._active_provider_id(stub) == "groq"
+
+
+@pytest.mark.asyncio
+async def test_status_bar_model_updates_immediately():
+    """Regression: /model switch must update the bottom status bar's model
+    readout at once, not wait for the next usage event."""
+    from textual.app import App
+    from textual.widgets import Label
+    from textual.containers import Vertical
+
+    from neo.tui.widgets import StatusBar
+
+    seen = {}
+
+    class _A(App):
+        def compose(self):
+            yield StatusBar()
+
+    app = _A()
+    async with app.run_test(size=(100, 30)) as pilot:
+        bar = app.query_one(StatusBar)
+        await pilot.pause(0.3)
+        bar.set_model("anthropic/claude-sonnet-4-6")
+        await pilot.pause(0.2)
+        seen["old"] = bar.query_one(".status-right", Label).render()
+        bar.set_model("gemini/gemini")
+        await pilot.pause(0.2)
+        seen["new"] = bar.query_one(".status-right", Label).render()
+    assert "anthropic/claude-sonnet-4-6" in str(seen["old"])
+    assert "gemini/gemini" in str(seen["new"])
