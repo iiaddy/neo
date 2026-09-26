@@ -22,7 +22,8 @@ neo-agnt = "neo.cli:main"
 where = ["src"]
 
 [tool.setuptools.package-data]
-neo = ["templates/**/*", "tui/themes/*.json", "providers/*.json"]
+neo = ["templates/**/*", "tui/themes/*.json", "providers/*.json",
+       "prompts/*.md", "prompts/agents/*.md"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

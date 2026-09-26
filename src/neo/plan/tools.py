@@ -11,6 +11,7 @@ import re
 from pathlib import Path
 
 from ..tools.base import Tool, ToolContext, ToolResult
+from ..prompts import render_prompt
 
 PLANS_DIRNAME = ".neo/plans"
 
@@ -205,33 +206,11 @@ class PlanEnterTool(Tool):
                 {"goal": goal, "active": True,
                  "plan_path": str(plan_file), "slug": slug})
 
-        instructions = (
-            f"Plan mode active. Goal: {goal}\n\n"
-            "You are in a READ-ONLY planning phase. Do NOT write or edit code, "
-            "run bash, or change system state — the plan document below is "
-            "the only file you may touch.\n\n"
-            "Workflow:\n"
-            "1. Understand: read relevant files, configs, tests, project notes. "
-            "Launch up to 3 explore specialists IN PARALLEL (one message, "
-            "multiple task calls) when the scope is uncertain; 1 when isolated. "
-            "Ask the user clarifying questions with the question tool — "
-            "don't build on wrong assumptions.\n"
-            "2. Design: draft the approach from exploration. Spawn a planner "
-            "subagent for non-trivial tasks to weigh alternatives.\n"
-            "3. Review: re-read critical files, check against the request, "
-            "clarify leftovers with the question tool.\n"
-            "4. Final plan: write ONLY to the plan file below.\n"
-            "5. Finish: call plan_exit with the plan path and a one-paragraph "
-            "summary. Your turn ends by asking a question or calling plan_exit.\n\n"
-            f"- Write your plan to: {plan_file}\n"
-            "  The plan must include: goal (one line), current state, proposed "
-            "changes file by file with the key edits, risks/open questions, "
-            "and verification steps.\n"
-            "- Allowed tools: read, list_dir, glob, grep, webfetch, websearch, "
-            "question, task (explore specialist only), plan_exit, and "
-            f"write/edit strictly under {PLANS_DIRNAME}/.\n"
-            "- Do not start implementing. Implementation begins after the "
-            "plan is approved."
+        instructions = render_prompt(
+            "plan_enter",
+            goal=goal,
+            plan_file=str(plan_file),
+            plans_dirname=PLANS_DIRNAME,
         )
         return ToolResult(output=instructions, title=f"plan: {slug}")
 
