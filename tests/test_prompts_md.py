@@ -98,3 +98,11 @@ def test_plan_enter_tool_uses_rendered_template():
         plans_dirname=".neo/plans",
     )
     assert res.output == expected
+
+
+def test_system_prompt_has_identity_contract():
+    """The model must answer identity questions as neo, not as its base model."""
+    text = load_prompt("system")
+    assert "Your name is neo." in text
+    assert "When the user asks who you are" in text
+    assert "Never claim to be a different assistant" in text
