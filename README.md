@@ -2,7 +2,7 @@
 
 [![PyPI](https://img.shields.io/pypi/v/neo-agnt)](https://pypi.org/project/neo-agnt/)
 [![Python](https://img.shields.io/badge/python-3.10%2B-blue)](https://www.python.org/downloads/)
-[![Tests](https://img.shields.io/badge/tests-491%20passed-brightgreen)](https://github.com/iiaddy/neo)
+[![Tests](https://img.shields.io/badge/tests-493%20passed-brightgreen)](https://github.com/iiaddy/neo)
 [![License](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 [![Providers](https://img.shields.io/badge/providers-228-orange)](https://github.com/iiaddy/neo)
 
@@ -20,6 +20,18 @@ neo:  planning… wrote .neo/plans/rate-limit.md
 ```
 
 One install, no daemon, no browser, no IDE extension, no account.
+
+## Highlights
+
+| | |
+| --- | --- |
+| Autonomous loop | plan → act → verify, with parallel tool calls, retries, doom-loop guard, and auto-compaction |
+| Sandboxed shell | bubblewrap isolation on Linux: read-only root, filtered network, hidden secrets |
+| 228 providers | OpenAI / Anthropic / Gemini protocols, any OpenAI-compatible `base_url`, `/login` wizard |
+| Plan mode | research-only planning with approval gate before any code is touched |
+| Long-term memory | `MEMORY.md` (project + global), auto-loaded every session |
+| Safety net | git snapshots, selective restore, session forks, approval-gated undo |
+| Live TUI | command palette, streaming markdown, permission prompts, 3 themes |
 
 ## Install
 
@@ -77,11 +89,21 @@ neo snapshot | neo restore | neo fork        # git snapshots and session forks
 
 In the TUI: `/` opens the command palette, `@` completes file paths,
 `Ctrl+C` cancels the running turn, typing mid-run queues your message for
-the next turn. Scroll the transcript with `pageup`/`pagedown`,
-`shift+up`/`shift+down`, or the mouse wheel — the view stays pinned to new
-output only while you're already at the bottom. `/login` stores a provider
-key, `/logout` removes it, `/model` switches models within the active
-provider, `/memory` shows what's remembered.
+the next turn. `/login` stores a provider key, `/logout` removes it,
+`/model` switches models within the active provider, `/memory` shows what's
+remembered.
+
+| Keys | Action |
+| --- | --- |
+| `/` | command palette |
+| `@` | file-path completion |
+| `pageup` / `pagedown` | scroll transcript a page |
+| `shift+up` / `shift+down` | scroll transcript a line |
+| mouse wheel | scroll transcript |
+| `Ctrl+C` | cancel the running turn |
+
+The transcript stays pinned to new output only while you're already at the
+bottom, so reading history never jumps.
 
 ## Configure
 
@@ -236,7 +258,7 @@ src/neo/
 ## Tests
 
 ```bash
-python -m pytest          # 491 passed, 4 skipped
+python -m pytest          # 493 passed, 4 skipped
 ```
 
 ## License
