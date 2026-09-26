@@ -40,8 +40,8 @@ Screen { background: $background; }
 }
 #transcript:focus { border: none; }
 
-.msg-role { color: $accent; text-style: bold; margin-top: 1; }
-.msg-body { margin-left: 1; }
+.user-msg { border-left: solid $accent; padding-left: 1; margin-top: 1; height: auto; }
+.assistant-msg { margin-top: 1; height: auto; }
 
 .reasoning { margin-left: 1; border-left: solid $text-muted; padding-left: 1; }
 .reasoning-body { color: $text-muted; }

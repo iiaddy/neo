@@ -17,22 +17,21 @@ STREAM_FLUSH_CHARS = 400
 
 
 class UserMessage(Vertical):
-    """A user prompt bubble."""
+    """A user prompt rendered as an accent-bar quote block (no role label)."""
 
     def __init__(self, text: str) -> None:
-        super().__init__()
+        super().__init__(classes="user-msg")
         self._text = text
 
     def compose(self):
-        yield Label("you", classes="msg-role")
-        yield Static(Text(self._text), classes="msg-body")
+        yield Static(Text(self._text), classes="user-msg-body")
 
 
 class AssistantMessage(Vertical):
     """Assistant reply with throttled incremental markdown rendering."""
 
     def __init__(self) -> None:
-        super().__init__()
+        super().__init__(classes="assistant-msg")
         self._buf: list[str] = []
         self._len = 0
         self._last_flush = 0.0
@@ -40,8 +39,7 @@ class AssistantMessage(Vertical):
         self._done = False
 
     def compose(self):
-        yield Label("neo", classes="msg-role")
-        self._md = Markdown("", classes="msg-body")
+        self._md = Markdown("", classes="assistant-msg-body")
         yield self._md
 
     def append_text(self, text: str) -> None:
