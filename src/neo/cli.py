@@ -62,7 +62,8 @@ def build_runtime(workdir: str | Path, config: NeoConfig,
                              for n, s in sorted(skills.items()))
     system = build_system_prompt(tools=tools, project_notes=notes,
                                  memory_notes=memory,
-                                 skills_index=skills_index)
+                                 skills_index=skills_index,
+                                 model=config.model, workdir=workdir)
     _agent_system = (_agent_def.get("system") or "").strip()
     if _agent_system:
         system = _agent_system + "\n\n" + system

@@ -22,7 +22,13 @@ class TodoWriteTool(Tool):
     name = "todo_write"
     description = (
         "Replace the session todo list. Exactly one todo may be in_progress "
-        "(extras are auto-demoted to pending). Emits a TodoUpdate event."
+        "(extras are auto-demoted to pending). Emits a TodoUpdate event. "
+        "When to use: 3+ step tasks, multi-part user requests, or new "
+        "instructions arriving mid-task. Skip for single straightforward "
+        "tasks. Rules: mark in_progress before starting work, completed only "
+        "after the work (including verification) is actually done — never on "
+        "intent. If blocked, keep it in_progress and add a follow-up todo "
+        "for the blocker."
     )
     parameters = {
         "type": "object",

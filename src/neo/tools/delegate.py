@@ -31,7 +31,14 @@ class TaskTool(Tool):
     name = "task"
     description = (
         "Delegate work to a subagent. The child runs with a restricted toolset "
-        "and returns a text summary. Pass resume=<id> to poll a background task."
+        "and returns a text summary. Pass resume=<id> to poll a background task. "
+        "When NOT to use: for a known file path use read; for a symbol use "
+        "grep; for a filename pattern use glob — the task tool is for "
+        "multi-step research, not single lookups. "
+        "Usage: launch independent subagents in one message for parallelism. "
+        "Give each a detailed brief and state exactly what to return. Once "
+        "delegated, don't duplicate the work yourself. Tell the agent whether "
+        "it may write code or is research-only."
     )
     parameters = {
         "type": "object",

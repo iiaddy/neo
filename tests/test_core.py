@@ -223,3 +223,37 @@ def test_load_memory_missing_is_empty(tmp_path, monkeypatch):
     from neo.agent.prompts import load_memory
     monkeypatch.setenv("HOME", str(tmp_path))
     assert load_memory(tmp_path / "empty") == []
+
+
+def test_system_prompt_sections():
+    from neo.agent.prompts import build_system_prompt
+    p = build_system_prompt(tools={}, project_notes=[],
+                            model="anthropic/claude-x", workdir="/tmp")
+    for section in ("# Tone and style", "# Proactiveness",
+                    "# Following conventions", "# Code style",
+                    "# Doing tasks", "# Tool usage", "# Code references",
+                    "## Memory", "## Environment"):
+        assert section in p, section
+    assert "anthropic/claude-x" in p
+    assert "Is directory a git repo" in p
+    # key behavioral rules present
+    assert "fewer than" not in p  # neo keeps it simpler than opencode's 4-line rule
+    assert "NEVER commit" in p
+    assert "Do not add code comments unless the user asks" in p
+    assert "file:line" in p
+
+
+def test_plan_enter_instructions_have_workflow():
+    import asyncio
+    from neo.plan.tools import PlanEnterTool
+    from neo.tools.base import ToolContext
+    from types import SimpleNamespace
+    import tempfile
+    tmp = tempfile.mkdtemp()
+    ctx = SimpleNamespace(workdir=tmp, plan_mode=None)
+    tool = PlanEnterTool()
+    res = asyncio.run(tool.run({"goal": "add tests"}, ctx))
+    assert not res.is_error
+    assert "READ-ONLY" in res.output
+    assert "plan_exit" in res.output
+    assert ".neo/plans" in res.output

@@ -60,7 +60,11 @@ class ReadTool(Tool):
     name = "read"
     description = (
         "Read a text file and return its contents with line numbers. "
-        "Use list_dir for directories."
+        "Use list_dir for directories. "
+        "Usage: read a large window instead of tiny repeated slices; re-read "
+        "with a bigger offset for later sections. Use grep to find content in "
+        "large files, glob when unsure of the exact path. Call in parallel "
+        "when you already know several files to read."
     )
     parameters = {
         "type": "object",
@@ -146,7 +150,11 @@ class ListDirTool(Tool):
 
 class GlobTool(Tool):
     name = "glob"
-    description = "Find files matching a glob pattern (recursive). Pattern examples: '**/*.py', 'src/*.ts'."
+    description = (
+        "Find files matching a glob pattern (recursive). Pattern examples: "
+        "'**/*.py', 'src/*.ts'. Usage: start broad when exploring, then "
+        "narrow. Prefer this over bash find/ls."
+    )
     parameters = {
         "type": "object",
         "properties": {
@@ -176,7 +184,11 @@ class GlobTool(Tool):
 
 class GrepTool(Tool):
     name = "grep"
-    description = "Search file contents with a regex pattern. Uses ripgrep when available."
+    description = (
+        "Search file contents with a regex pattern. Uses ripgrep when "
+        "available. Usage: use for symbols, strings, and concepts across "
+        "files; use read once you know the exact file."
+    )
     parameters = {
         "type": "object",
         "properties": {
@@ -263,7 +275,13 @@ class GrepTool(Tool):
 
 class WriteTool(Tool):
     name = "write"
-    description = "Write (or overwrite) a file, creating parent directories as needed."
+    description = (
+        "Write (or overwrite) a file, creating parent directories as needed. "
+        "Usage: read the file first if it exists. ALWAYS prefer editing "
+        "existing files — never write new files unless required. Never "
+        "proactively create documentation (*.md) files; only when the user "
+        "asks. No emojis in files unless requested."
+    )
     parameters = {
         "type": "object",
         "properties": {
@@ -406,7 +424,11 @@ class EditTool(Tool):
     description = (
         "Replace text in a file. Strategies tried in order: exact match, "
         "line-trimmed, whitespace-normalized, indentation-flexible, "
-        "escape-normalized. Requires exactly one match unless replace_all."
+        "escape-normalized. Requires exactly one match unless replace_all. "
+        "Usage: read the file first. Copy old_text exactly as shown after "
+        "the line-number prefix — never include the prefix itself. Fails when "
+        "old_text is missing or matches multiple times; widen the context "
+        "or use replace_all."
     )
     parameters = {
         "type": "object",

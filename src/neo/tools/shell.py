@@ -67,7 +67,11 @@ class BashTool(Tool):
         "merged. On timeout the whole process group is killed. "
         "When the sandbox is enabled (neo.json), the command runs inside a "
         "bubblewrap sandbox: read-only filesystem except the workdir, "
-        "sensitive paths hidden, network per policy."
+        "sensitive paths hidden, network per policy. "
+        "Usage: prefer the dedicated file tools (read/write/edit/glob/grep) "
+        "over shell for file operations. Batch independent commands in one "
+        "message so they run in parallel. Explain non-trivial commands "
+        "before running them."
     )
     parameters = {
         "type": "object",
