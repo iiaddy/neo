@@ -120,6 +120,27 @@ def plan_mode_allows(tool_name: str, target: str,
                    f"{PLANS_DIRNAME}/.")
 
 
+def plan_mode_allows_paths(paths: list[str],
+                           workdir: Path) -> tuple[bool, str]:
+    """Decide an apply_patch call while plan mode is active.
+
+    Every touched file must resolve under .neo/plans/; a single file
+    outside denies the whole patch.
+    """
+    targets = [str(p) for p in paths]
+    if not targets:
+        return False, ("In plan mode apply_patch with no touched files is "
+                       "denied. You may only write the plan document under "
+                       f"{PLANS_DIRNAME}/.")
+    for target in targets:
+        if not _under_plans(target, Path(workdir)):
+            return False, (f"In plan mode apply_patch is denied on "
+                           f"'{target}'. You may only write the plan "
+                           f"document under {PLANS_DIRNAME}/. Call plan_exit "
+                           "when the plan is ready.")
+    return True, ""
+
+
 def build_handoff(plan_path: Path, summary: str) -> str:
     """Render the approved plan as the user message that starts the build turn."""
     plan_text = Path(plan_path).read_text(encoding="utf-8").strip()
@@ -155,7 +176,6 @@ class PlanEnterTool(Tool):
         "required": ["goal"],
         "additionalProperties": False,
     }
-    needs_approval = False
 
     async def run(self, args: dict, ctx: ToolContext) -> ToolResult:
         goal = str(args.get("goal", "")).strip()
@@ -225,7 +245,6 @@ class PlanExitTool(Tool):
         "required": ["plan_path", "summary"],
         "additionalProperties": False,
     }
-    needs_approval = False
 
     async def run(self, args: dict, ctx: ToolContext) -> ToolResult:
         raw = str(args.get("plan_path", "")).strip()
@@ -255,6 +274,47 @@ class PlanExitTool(Tool):
                         "first, then call plan_exit."),
                 title=self.name,
             )
+
+        # Leaving plan mode hands control to the build turn: ask the user
+        # first. A rejected answer is a graceful error and plan mode stays
+        # active; only an explicit approval flips it off.
+        ui = ctx.ui
+        ask = getattr(ui, "ask", None) if ui is not None else None
+        if callable(ask):
+            answers = await ask([{
+                "header": "plan_exit",
+                "question": ("Switch to build mode and implement this plan?\n\n"
+                             f"Plan: {resolved}\n{summary}"),
+                "options": [
+                    {"label": "Yes, implement it",
+                     "description": "Leave plan mode and start building."},
+                    {"label": "No, keep planning",
+                     "description": "Stay in plan mode; the plan is unchanged."},
+                ],
+            }])
+            chosen = ""
+            if isinstance(answers, dict):
+                chosen = answers.get("0", answers.get("plan_exit", "")) or ""
+            approved = (isinstance(chosen, str)
+                        and chosen.strip().lower().startswith("yes"))
+        else:
+            # No interactive UI (headless/scripted runs): fall back to the
+            # standard permission gate so plan_exit still needs approval.
+            gate = getattr(ctx, "gate", None)
+            if not callable(gate):
+                return ToolResult(
+                    is_error=True,
+                    output=("plan_exit needs approval but no interactive UI "
+                            "or permission gate is available."),
+                    title=self.name)
+            answer = await gate(self.name, str(resolved), summary)
+            approved = answer in ("once", "always")
+        if not approved:
+            return ToolResult(
+                is_error=True,
+                output=("Staying in plan mode — the plan was not approved. "
+                        "Refine the plan and call plan_exit again when ready."),
+                title=self.name)
 
         state = getattr(ctx, "plan_mode", None)
         if isinstance(state, dict):

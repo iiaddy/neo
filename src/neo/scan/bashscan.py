@@ -98,6 +98,47 @@ def scan(cmd: str) -> list[str]:
     return out
 
 
+# -- structured API used by the permission check ------------------------------
+
+_ENV_PREFIX_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*=")
+
+
+def is_dynamic(segment: str) -> bool:
+    """True when *segment* can evaluate to something its text does not show.
+
+    Command substitution ``$(...)`` / ``${...}``, backticks, and leading
+    ``NAME=value`` environment assignments all change what actually runs,
+    so a policy rule matching the static text must never silently allow.
+    """
+    if "$(" in segment or "${" in segment or "`" in segment:
+        return True
+    argv = [t for t in _tokenize(segment) if t]
+    return bool(argv) and bool(_ENV_PREFIX_RE.match(argv[0]))
+
+
+def scan_commands(cmd: str) -> list[tuple[str, list[str]]]:
+    """Split *cmd* into ``(raw_segment, signatures)`` pairs, one per command.
+
+    *raw_segment* is the full stripped source text of the command; it is also
+    registered as the first signature candidate so exact-match policy rules
+    work on quoted text that shlex tokenization would otherwise reshape
+    (e.g. ``echo "a b"`` also matches the signature ``echo "a b"``).
+    The remaining candidates are the shlex-derived generalized signatures.
+    """
+    out: list[tuple[str, list[str]]] = []
+    for raw_segment in _split_segments(cmd or ""):
+        segment = raw_segment.strip()
+        argv = [t for t in _tokenize(segment) if t]
+        if not argv:
+            continue
+        sigs: list[str] = []
+        for sig in [segment] + _signatures(argv):
+            if sig not in sigs:
+                sigs.append(sig)
+        out.append((segment, sigs))
+    return out
+
+
 def first_word(cmd: str) -> str:
     """The program name of the first command segment (shlex-aware)."""
     segments = _split_segments(cmd or "")

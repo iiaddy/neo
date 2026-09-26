@@ -103,12 +103,32 @@ def _headless_gate_factory(allow_all: bool):
 
 
 async def run_print(prompt: str, workdir: str, config: NeoConfig,
-                    allow_all: bool, resume: str | None):
+                    allow_all: bool, resume: str | None) -> int:
+    """Headless one-shot mode. Returns the process exit code."""
     from .agent.session import SessionStore
     from . import events as E
 
     store = SessionStore()
-    sid = resume or store.new(title=prompt[:60], model=config.model)
+    if resume:
+        if not store._path(resume).is_file():
+            print(f"neo: error: unknown session '{resume}'", file=sys.stderr)
+            return 1
+        sid = resume
+    else:
+        sid = store.new(title=prompt[:60], model=config.model)
+    try:
+        return await _run_print_body(prompt, workdir, config, allow_all,
+                                     resume, store, sid)
+    except BrokenPipeError:
+        # Downstream closed the pipe (e.g. `neo -p ... | head -n5`): the
+        # user got what they asked for, so exit quietly instead of
+        # tracebacking on the dead stdout.
+        return 0
+
+
+async def _run_print_body(prompt: str, workdir: str, config: NeoConfig,
+                          allow_all: bool, resume: str | None,
+                          store, sid: str) -> int:
     if resume:
         messages = store.messages_from_records(store.load(sid))
         print(f"[resumed {sid}]")
@@ -174,8 +194,10 @@ async def run_print(prompt: str, workdir: str, config: NeoConfig,
     except KeyboardInterrupt:
         print("\n<interrupted>")
         harness.cancel()
+        return 130
     except RuntimeError as exc:
         print(f"\nneo: error: {exc}")
+        return 1
     finally:
         plugins = getattr(_ctx, "plugins", None)
         if plugins is not None:
@@ -189,6 +211,7 @@ async def run_print(prompt: str, workdir: str, config: NeoConfig,
                 await mcp.stop()
             except Exception:
                 pass
+    return 0
 
 
 def cmd_init(args) -> int:
@@ -394,9 +417,8 @@ def main(argv: list[str] | None = None) -> int:
         return cmd_fork(args)
 
     if args.prompt:
-        asyncio.run(run_print(args.prompt, ".", config, args.allow_all,
-                              args.resume))
-        return 0
+        return asyncio.run(run_print(args.prompt, ".", config, args.allow_all,
+                                     args.resume))
 
     # default: TUI
     from .tui import run_tui

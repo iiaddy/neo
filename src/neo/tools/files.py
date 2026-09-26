@@ -14,6 +14,8 @@ from pathlib import Path
 from .base import Tool, ToolContext, ToolResult, path_lock
 
 _READ_LIMIT = 2000
+_READ_LINE_MAX = 2000   # per-line char cap
+_READ_TOTAL_MAX = 50_000  # total output char cap (~50KB)
 _GLOB_CAP = 200
 _GREP_CAP = 100
 _OUTPUT_CAP = 60_000
@@ -70,7 +72,6 @@ class ReadTool(Tool):
         "required": ["path"],
         "additionalProperties": False,
     }
-    needs_approval = False
 
     async def run(self, args: dict, ctx: ToolContext) -> ToolResult:
         path = _resolve(ctx, args["path"])
@@ -105,7 +106,16 @@ class ReadTool(Tool):
         if offset > total:
             return ToolResult(output="", title=f"{_rel(ctx, path)}:{offset}")
         picked = lines[offset - 1 : offset - 1 + limit]
-        out = "\n".join(f"{offset + i}| {line}" for i, line in enumerate(picked))
+        rows = []
+        for i, line in enumerate(picked):
+            if len(line) > _READ_LINE_MAX:
+                line = (line[:_READ_LINE_MAX] +
+                        f"... (line truncated, {len(line) - _READ_LINE_MAX} more chars)")
+            rows.append(f"{offset + i}| {line}")
+        out = "\n".join(rows)
+        if len(out) > _READ_TOTAL_MAX:
+            out = (out[:_READ_TOTAL_MAX] +
+                   f"\n... (output capped at {_READ_TOTAL_MAX // 1000}KB; re-read with a smaller limit)")
         if offset - 1 + limit < total:
             out += f"\n... ({total - (offset - 1 + limit)} more lines; re-read with offset)"
         return ToolResult(output=out, title=f"{_rel(ctx, path)}:{offset}-{offset + len(picked) - 1}")
@@ -121,7 +131,6 @@ class ListDirTool(Tool):
         },
         "additionalProperties": False,
     }
-    needs_approval = False
 
     async def run(self, args: dict, ctx: ToolContext) -> ToolResult:
         path = _resolve(ctx, args.get("path", "."))
@@ -147,7 +156,6 @@ class GlobTool(Tool):
         "required": ["pattern"],
         "additionalProperties": False,
     }
-    needs_approval = False
 
     async def run(self, args: dict, ctx: ToolContext) -> ToolResult:
         base = _resolve(ctx, args.get("path", "."))
@@ -179,7 +187,6 @@ class GrepTool(Tool):
         "required": ["pattern"],
         "additionalProperties": False,
     }
-    needs_approval = False
 
     async def run(self, args: dict, ctx: ToolContext) -> ToolResult:
         target = _resolve(ctx, args.get("path", "."))
@@ -428,49 +435,56 @@ class EditTool(Tool):
             return ToolResult(is_error=True, output=f"{path} is a directory.", title=self.name)
 
         old_diags = await _snapshot_diags(ctx, path)
+        # One lock across the whole read-modify-write sequence: locking the
+        # read and the write separately lets a concurrent writer slip in
+        # between and get its changes silently clobbered by our write.
         async with path_lock(ctx, path):
-            text = path.read_text(encoding="utf-8")
+            # newline="" disables universal-newline translation so CRLF
+            # files can be detected (read_text would silently turn \r\n
+            # into \n, making the check below always false).
+            with path.open("r", encoding="utf-8", newline="") as f:
+                raw_text = f.read()
+            crlf = "\r\n" in raw_text
+            text = raw_text.replace("\r\n", "\n") if crlf else raw_text
 
-        newline = "\r\n" if "\r\n" in text else "\n"
-
-        strategies = [
-            ("exact", lambda: _all_spans(text, old), old, new),
-            ("line-trimmed", lambda: _line_trimmed_spans(text, old), old, new),
-            ("whitespace-normalized", lambda: _whitespace_normalized_spans(text, old), old, new),
-            ("indentation-flexible", lambda: _indent_flexible_spans(text, old), old, new),
-            ("escape-normalized", lambda: _all_spans(text, _unescape(old)), _unescape(old), _unescape(new)),
-        ]
-        spans: list[tuple[int, int]] = []
-        chosen = ""
-        rep_new = new
-        for sname, fn, _o, _n in strategies:
-            found = fn()
-            if found:
-                spans, chosen, rep_new = found, sname, _n
-                break
-        if not spans:
-            return ToolResult(is_error=True, output="old text not found in file.", title=self.name)
-        if not replace_all:
-            if len(spans) > 1:
-                return ToolResult(
-                    is_error=True,
-                    output=f"old text matched {len(spans)} times; not unique. Pass replace_all=true or narrow the text.",
-                    title=self.name,
-                )
-            if chosen != "exact" and (spans[0][1] - spans[0][0]) > 3 * len(old):
-                return ToolResult(
-                    is_error=True,
-                    output="match too fuzzy, re-read the file",
-                    title=self.name,
-                )
-        # Preserve the file's newline style in the replacement text.
-        if newline == "\r\n":
-            rep_new = rep_new.replace("\n", "\r\n")
-        updated = text
-        for s, e in sorted(spans, reverse=True):
-            updated = updated[:s] + rep_new + updated[e:]
-        async with path_lock(ctx, path):
-            path.write_text(updated, encoding="utf-8")
+            strategies = [
+                ("exact", lambda: _all_spans(text, old), old, new),
+                ("line-trimmed", lambda: _line_trimmed_spans(text, old), old, new),
+                ("whitespace-normalized", lambda: _whitespace_normalized_spans(text, old), old, new),
+                ("indentation-flexible", lambda: _indent_flexible_spans(text, old), old, new),
+                ("escape-normalized", lambda: _all_spans(text, _unescape(old)), _unescape(old), _unescape(new)),
+            ]
+            spans: list[tuple[int, int]] = []
+            chosen = ""
+            rep_new = new
+            for sname, fn, _o, _n in strategies:
+                found = fn()
+                if found:
+                    spans, chosen, rep_new = found, sname, _n
+                    break
+            if not spans:
+                return ToolResult(is_error=True, output="old text not found in file.", title=self.name)
+            if not replace_all:
+                if len(spans) > 1:
+                    return ToolResult(
+                        is_error=True,
+                        output=f"old text matched {len(spans)} times; not unique. Pass replace_all=true or narrow the text.",
+                        title=self.name,
+                    )
+                if chosen != "exact" and (spans[0][1] - spans[0][0]) > 3 * len(old):
+                    return ToolResult(
+                        is_error=True,
+                        output="match too fuzzy, re-read the file",
+                        title=self.name,
+                    )
+            updated = text
+            for s, e in sorted(spans, reverse=True):
+                updated = updated[:s] + rep_new + updated[e:]
+            if crlf:
+                # Preserve the file's original CRLF line endings.
+                updated = updated.replace("\n", "\r\n")
+            with path.open("w", encoding="utf-8", newline="") as f:
+                f.write(updated)
         n = len(spans)
         output = (f"Replaced {n} occurrence{'s' if n != 1 else ''} in {_rel(ctx, path)} "
                   f"(strategy: {chosen}).")

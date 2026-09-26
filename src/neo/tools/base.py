@@ -43,7 +43,6 @@ class Tool(abc.ABC):
     name: ClassVar[str]
     description: ClassVar[str]
     parameters: ClassVar[dict]  # JSON Schema for the LLM
-    needs_approval: ClassVar[bool] = True  # False for pure readers
 
     @abc.abstractmethod
     async def run(self, args: dict, ctx: ToolContext) -> ToolResult:

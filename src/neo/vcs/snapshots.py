@@ -34,6 +34,9 @@ class VCSError(ValueError):
 _SNAP_FILE = ".neo/snapshots.json"
 _HANDLE_LEN = 40
 
+# Cap on stored snapshot records; older ones are pruned on each new snapshot.
+_MAX_RECORDS = 50
+
 
 def _git_bin() -> str:
     exe = shutil.which("git")
@@ -105,6 +108,11 @@ def snapshot(workdir: Path, message: str = "") -> str | None:
             r = _run(["add", "-A"], workdir, env=env)
             if r.returncode != 0:
                 return None
+            # Never capture the snapshot records file itself: restore()
+            # checks out the whole tree, which would otherwise rewind the
+            # records and destroy the handles of every later snapshot.
+            _run(["rm", "--cached", "--ignore-unmatch", "-q", "--", _SNAP_FILE],
+                 workdir, env=env)
             r = _run(["write-tree"], workdir, env=env)
             if r.returncode != 0:
                 return None
@@ -116,7 +124,16 @@ def snapshot(workdir: Path, message: str = "") -> str | None:
                "message": message, "ts": time.time()}
         records = _read_records(workdir)
         records.append(rec)
+        pruned = 0
+        if len(records) > _MAX_RECORDS:
+            # Keep the newest records; pruned trees still exist as git
+            # objects, but their handles are no longer restorable.
+            pruned = len(records) - _MAX_RECORDS
+            records = records[-_MAX_RECORDS:]
         _write_records(workdir, records)
+        if pruned:
+            print(f"[neo] pruned {pruned} old snapshot(s); "
+                  f"keeping newest {_MAX_RECORDS}", file=sys.stderr)
         return tree
     except VCSError:
         return None
@@ -171,15 +188,34 @@ def restore(workdir: Path, handle: str,
     """Restore the worktree to the snapshot (whole tree or selected paths).
 
     Uses ``git checkout <tree> -- ...`` only — no reset, no index surgery.
-    Returns a short summary ending in ``git status --porcelain`` output.
-    Refuses unknown handles.
+    A selected path that does not exist in the snapshot tree (created after
+    the snapshot) is deleted instead of erroring. Returns a short summary
+    ending in ``git status --porcelain`` output. Refuses unknown handles.
     """
     _find(workdir, handle)  # raises on unknown handle
-    args = ["checkout", handle, "--"]
-    args += list(paths) if paths else ["."]
-    r = _run(args, workdir)
-    if r.returncode != 0:
-        raise VCSError(f"git checkout failed: {r.stderr.strip()}")
+    if paths:
+        # checkout errors on paths absent from the snapshot tree; a path
+        # that was created after the snapshot must be deleted instead.
+        present, missing = [], []
+        for p in paths:
+            r = _run(["ls-tree", "--name-only", handle, "--", p], workdir)
+            if r.returncode == 0 and r.stdout.strip():
+                present.append(p)
+            else:
+                missing.append(p)
+        for p in missing:
+            target = workdir / p
+            if target.is_symlink() or target.is_file():
+                target.unlink()
+            elif target.is_dir():
+                shutil.rmtree(target)
+        args = ["checkout", handle, "--", *present] if present else None
+    else:
+        args = ["checkout", handle, "--", "."]
+    if args is not None:
+        r = _run(args, workdir)
+        if r.returncode != 0:
+            raise VCSError(f"git checkout failed: {r.stderr.strip()}")
     r = _run(["status", "--porcelain"], workdir)
     if r.returncode != 0:
         raise VCSError(f"git status failed: {r.stderr.strip()}")

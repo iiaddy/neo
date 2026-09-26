@@ -170,7 +170,10 @@ def test_fork_session_copies_records(store: SessionStore):
     # ses_ ids in payloads remapped away from the originals
     note = bodies[1]
     assert note["self"] == new_sid
-    assert note["other"] != "ses_20200101000000_zzzz"
+    # Only the session's own id is remapped; foreign ses_ ids (parent
+    # links, subagent refs, ...) are preserved so fork-of-fork chains
+    # keep valid references instead of dangling remapped ids.
+    assert note["other"] == "ses_20200101000000_zzzz"
     # original untouched
     assert store.load(sid)[0]["t"] == "meta"
     assert "forked_from" not in store.load(sid)[0]

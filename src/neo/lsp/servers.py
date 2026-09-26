@@ -44,13 +44,6 @@ SERVERS: dict[str, ServerEntry] = {
         language_id="python",
         install_hint="pip install basedpyright  (or: npm i -g pyright)",
     ),
-    "typescript-language-server": ServerEntry(
-        name="typescript-language-server",
-        command=["typescript-language-server", "--stdio"],
-        extensions=(".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs"),
-        language_id="typescript",
-        install_hint="npm i -g typescript-language-server typescript",
-    ),
     "gopls": ServerEntry(
         name="gopls",
         command=["gopls"],
@@ -71,6 +64,13 @@ SERVERS: dict[str, ServerEntry] = {
         extensions=(".js", ".jsx", ".ts", ".tsx"),
         language_id="javascript",
         install_hint="npm i -g vscode-eslint-language-server",
+    ),
+    "typescript-language-server": ServerEntry(
+        name="typescript-language-server",
+        command=["typescript-language-server", "--stdio"],
+        extensions=(".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs"),
+        language_id="typescript",
+        install_hint="npm i -g typescript-language-server typescript",
     ),
 }
 

@@ -14,6 +14,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from neo.tools import TOOL_CLASSES, build_toolset  # noqa: E402
 from neo.tools.base import ToolContext  # noqa: E402
+from neo.agent.permissions import PermissionPolicy  # noqa: E402
 
 
 async def _gate(tool_name: str, target: str, detail: str) -> str:
@@ -306,9 +307,16 @@ def test_toolset_registration(tmp_path):
     ]
     assert sorted(tools) == sorted(expected)
     assert [c().name for c in TOOL_CLASSES] == expected
-    assert tools["read"].needs_approval is False
-    assert tools["write"].needs_approval is True
-    assert tools["question"].needs_approval is False
+    # needs_approval was removed: approval is enforced by the runtime
+    # permission policy, not a per-tool flag. Assert the live contract
+    # instead — which policy bucket each tool falls into.
+    policy = PermissionPolicy(rules={})
+    assert policy.key_for_tool("read") == "read"
+    assert policy.key_for_tool("write") == "edit"
+    assert policy.key_for_tool("apply_patch") == "edit"
+    assert policy.key_for_tool("question") == "session"
+    assert policy.key_for_tool("plan_enter") == "session"
+    assert policy.key_for_tool("plan_exit") == "session"
 
 
 def test_build_toolset_include_and_disabled(tmp_path):

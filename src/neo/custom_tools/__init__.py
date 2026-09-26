@@ -10,7 +10,6 @@ Tool files live in ``.neo/tools/*.py`` (project) and
         name = "my_tool"
         description = "Does something useful."
         parameters = {"type": "object", "properties": {}, "additionalProperties": False}
-        needs_approval = False
 
         async def run(self, args, ctx) -> ToolResult:
             return ToolResult(output="done", title=self.name)

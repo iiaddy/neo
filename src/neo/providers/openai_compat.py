@@ -121,8 +121,16 @@ class OpenAICompatProvider(Provider):
         if response.status_code != 200:
             raw = await response.aread()
             text = raw.decode("utf-8", "replace")
+            message = text[:500]
+            if not message and response.status_code in (401, 403):
+                env_hint = ", ".join(self.spec.env_vars) or f"{self.spec.id.upper()}_API_KEY"
+                message = (
+                    f"HTTP {response.status_code}: invalid or missing API key for "
+                    f"provider '{self.spec.id}' -- check the {env_hint} env var or "
+                    f"providers.{self.spec.id}.api_key in neo.json"
+                )
             yield StreamError(
-                message=text[:500] or f"HTTP {response.status_code}",
+                message=message or f"HTTP {response.status_code}",
                 retryable=is_retryable(response.status_code, text),
             )
             return

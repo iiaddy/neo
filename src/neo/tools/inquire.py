@@ -44,7 +44,6 @@ class InquiryTool(Tool):
         "required": ["questions"],
         "additionalProperties": False,
     }
-    needs_approval = False
 
     async def run(self, args: dict, ctx: ToolContext) -> ToolResult:
         questions = args.get("questions")

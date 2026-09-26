@@ -334,7 +334,6 @@ def test_manager_start_stop_two_servers_one_bad(tmp_path):
             tools = mgr.tools()
             assert "fake_echo" in tools
             assert "fake_fail" in tools
-            assert tools["fake_echo"].needs_approval is True
             assert tools["fake_echo"].parameters["properties"]["text"]["type"] == "string"
         finally:
             await mgr.stop()

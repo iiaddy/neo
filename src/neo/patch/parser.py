@@ -28,6 +28,7 @@ import dataclasses
 
 BEGIN = "*** Begin Patch"
 END = "*** End Patch"
+_EOF = "*** End of File"
 _UPDATE = "*** Update File:"
 _ADD = "*** Add File:"
 _DELETE = "*** Delete File:"
@@ -39,10 +40,13 @@ class PatchHunk:
     """One ``@@`` block: header text plus annotated lines.
 
     Each line is ``(kind, text)`` with kind in ``{"context", "remove", "add"}``.
+    ``end_of_file`` (from a ``*** End of File`` marker) anchors matching at
+    the end of the file.
     """
 
     header: str = ""
     lines: list[tuple[str, str]] = dataclasses.field(default_factory=list)
+    end_of_file: bool = False
 
 
 @dataclasses.dataclass
@@ -94,9 +98,14 @@ def parse_patch(text: str) -> list[PatchOp]:
             current.hunks.append(hunk)
         hunk = None
 
-    def close_op() -> None:
+    def close_op(lineno: int) -> None:
         nonlocal current, in_add
         close_hunk()
+        if current is not None and current.op == "update" and not current.hunks:
+            raise _err(
+                lineno,
+                f"Update File '{current.path}': expected at least one '@@' hunk",
+            )
         current = None
         in_add = False
 
@@ -106,7 +115,7 @@ def parse_patch(text: str) -> list[PatchOp]:
         stripped = raw.strip()
 
         if stripped == END:
-            close_op()
+            close_op(lineno)
             # Trailing content after the envelope is not allowed.
             j = i + 1
             while j < n and not lines[j].strip():
@@ -116,7 +125,7 @@ def parse_patch(text: str) -> list[PatchOp]:
             return ops
 
         if stripped.startswith(_UPDATE):
-            close_op()
+            close_op(lineno)
             path = stripped[len(_UPDATE):].strip()
             if not path:
                 raise _err(lineno, "Update File needs a path")
@@ -138,7 +147,7 @@ def parse_patch(text: str) -> list[PatchOp]:
             continue
 
         if stripped.startswith(_ADD):
-            close_op()
+            close_op(lineno)
             path = stripped[len(_ADD):].strip()
             if not path:
                 raise _err(lineno, "Add File needs a path")
@@ -149,7 +158,7 @@ def parse_patch(text: str) -> list[PatchOp]:
             continue
 
         if stripped.startswith(_DELETE):
-            close_op()
+            close_op(lineno)
             path = stripped[len(_DELETE):].strip()
             if not path:
                 raise _err(lineno, "Delete File needs a path")
@@ -179,6 +188,17 @@ def parse_patch(text: str) -> list[PatchOp]:
             i += 1
             continue
 
+        if raw == _EOF:
+            # EOF anchor: the current hunk is matched against the end of
+            # the file first (falling back to a forward search), then closed.
+            # Exact match only — a context line " *** End of File" stays data.
+            if hunk is None:
+                raise _err(lineno, f"'{_EOF}' needs an open '@@' hunk")
+            hunk.end_of_file = True
+            close_hunk()
+            i += 1
+            continue
+
         if hunk is None:
             raise _err(lineno, "expected '@@' to start a hunk")
 
@@ -194,5 +214,5 @@ def parse_patch(text: str) -> list[PatchOp]:
             raise _err(lineno, "hunk lines must start with ' ', '-', or '+'")
         i += 1
 
-    close_op()
+    close_op(n)
     raise _err(n, f"missing '{END}'")

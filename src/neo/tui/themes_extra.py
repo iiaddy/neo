@@ -1,7 +1,7 @@
 """Extra neo TUI themes. Same dict format as tui/themes.py:
 
 background, surface, panel, border, text, muted, accent,
-green, red, yellow, user_bg
+green, red, yellow
 """
 from __future__ import annotations
 
@@ -17,7 +17,6 @@ EXTRA_THEMES: dict[str, dict[str, str]] = {
         "green": "#4ade80",
         "red": "#f87171",
         "yellow": "#fbbf24",
-        "user_bg": "#14314a",
     },
     "neo-forest": {
         "background": "#0c130d",
@@ -30,7 +29,6 @@ EXTRA_THEMES: dict[str, dict[str, str]] = {
         "green": "#4ade80",
         "red": "#f87171",
         "yellow": "#eab308",
-        "user_bg": "#1d3320",
     },
     "neo-sunset": {
         "background": "#171008",
@@ -43,7 +41,6 @@ EXTRA_THEMES: dict[str, dict[str, str]] = {
         "green": "#4ade80",
         "red": "#ef4444",
         "yellow": "#fde047",
-        "user_bg": "#33200f",
     },
     "neo-mono": {
         "background": "#000000",
@@ -56,7 +53,6 @@ EXTRA_THEMES: dict[str, dict[str, str]] = {
         "green": "#bdbdbd",
         "red": "#f2f2f2",
         "yellow": "#9e9e9e",
-        "user_bg": "#1a1a1a",
     },
     "neo-raspberry": {
         "background": "#150a12",
@@ -69,7 +65,6 @@ EXTRA_THEMES: dict[str, dict[str, str]] = {
         "green": "#4ade80",
         "red": "#ef4444",
         "yellow": "#fbbf24",
-        "user_bg": "#331527",
     },
     "neo-arctic": {
         "background": "#eef3f7",
@@ -82,7 +77,6 @@ EXTRA_THEMES: dict[str, dict[str, str]] = {
         "green": "#15803d",
         "red": "#dc2626",
         "yellow": "#b45309",
-        "user_bg": "#d7e8f5",
     },
 }
 

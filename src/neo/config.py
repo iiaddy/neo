@@ -56,15 +56,50 @@ class NeoConfig:
     def from_dict(cls, data: dict) -> "NeoConfig":
         known = {f for f in cls.__dataclass_fields__}
         clean = {k: v for k, v in data.items() if k in known}
+        _validate_field_types(clean)
         cfg = cls()
         for k, v in clean.items():
-            if k in ("permissions", "providers", "keybindings", "sandbox", "mcp",
-                       "plugins", "lsp", "format", "agents") and isinstance(v, dict):
-                merged = getattr(cfg, k)
-                _deep_merge(merged, v)
+            if k in _DICT_FIELDS and isinstance(v, dict):
+                _deep_merge(getattr(cfg, k), v)
             else:
                 setattr(cfg, k, v)
         return cfg
+
+
+_STR_FIELDS = ("model", "small_model", "theme", "thinking", "agent")
+_INT_FIELDS = ("max_steps", "context_window")
+_DICT_FIELDS = ("permissions", "providers", "sandbox", "keybindings",
+                "mcp", "plugins", "lsp", "format", "agents")
+_LIST_FIELDS = ("verify_commands", "disabled_tools")
+
+
+def _validate_field_types(data: dict) -> None:
+    """Reject mistyped config values with field-specific messages.
+
+    Without this, a typo like ``"max_steps": "40"`` silently corrupts the
+    running config and fails far from the cause.
+    """
+    for k in _STR_FIELDS:
+        if k in data and not isinstance(data[k], str):
+            raise TypeError(
+                f"config field {k!r} must be a string, "
+                f"got {type(data[k]).__name__}")
+    for k in _INT_FIELDS:
+        v = data.get(k)
+        if k in data and (isinstance(v, bool) or not isinstance(v, int)):
+            raise TypeError(
+                f"config field {k!r} must be an integer, "
+                f"got {type(v).__name__}")
+    for k in _DICT_FIELDS:
+        if k in data and not isinstance(data[k], dict):
+            raise TypeError(
+                f"config field {k!r} must be an object, "
+                f"got {type(data[k]).__name__}")
+    for k in _LIST_FIELDS:
+        if k in data and not isinstance(data[k], list):
+            raise TypeError(
+                f"config field {k!r} must be a list, "
+                f"got {type(data[k]).__name__}")
 
 
 def _deep_merge(base: dict, override: dict) -> None:
@@ -126,22 +161,24 @@ def discover_config(workdir: str | Path = ".") -> tuple[NeoConfig, Path | None]:
             layers.append(p)
     cfg = NeoConfig()
     found: Path | None = None
+    merged: dict = {}
     for p in layers:
         try:
             data = json.loads(p.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError):
             continue
         if isinstance(data, dict):
-            cfg = NeoConfig.from_dict({**_as_dict(cfg), **data})
+            # Deep-merge the raw layer dicts: later layers win for
+            # scalar/list values, nested objects merge key by key, so a
+            # project file setting one permission rule no longer wipes the
+            # global file's unrelated rules.
+            _deep_merge(merged, data)
             found = p
+    cfg = NeoConfig.from_dict(merged)
     # env overrides
     if os.environ.get("NEO_MODEL"):
         cfg.model = os.environ["NEO_MODEL"]
     return cfg, found
-
-
-def _as_dict(cfg: NeoConfig) -> dict:
-    return {f: getattr(cfg, f) for f in cfg.__dataclass_fields__}
 
 
 def config_dir() -> Path:

@@ -115,7 +115,6 @@ def _register_themes(app: App) -> None:
             dark=not name.endswith("light"),
             variables={
                 "text-muted": c["muted"],
-                "user-bg": c["user_bg"],
             },
         ))
 
@@ -749,15 +748,23 @@ class NeoApp(App):
         self._refresh_topbar()
 
     async def _rebuild_runtime(self, keep_session: bool = False) -> None:
+        from ..providers import ProviderConfigError
+        try:
+            provider, harness, ctx, discovered = build_runtime(
+                self.workdir, self.config,
+                session_id=self.session_id,
+                gate=self._gate, emit=self._emit, ui=_UIBridge(self))
+        except ProviderConfigError as e:
+            # e.g. /model picked a provider with a blank base_url: keep the
+            # old runtime alive and tell the user instead of propagating
+            # through _run_slash.
+            self._notice(f"cannot switch model: {e}", "error")
+            return
         if self._provider is not None:
             try:
                 await self._provider.aclose()
             except Exception:
                 pass
-        provider, harness, ctx, discovered = build_runtime(
-            self.workdir, self.config,
-            session_id=self.session_id,
-            gate=self._gate, emit=self._emit, ui=_UIBridge(self))
         self._provider, self._harness, self._ctx = provider, harness, ctx
         self._discovered_cmds = discovered.get("commands", {})
         if self._mcp is not None:

@@ -13,6 +13,10 @@ from pathlib import Path
 from .snapshots import VCSError, _git_bin, _run
 
 
+# Upper bound for a single boot command; boot scripts must be finite.
+_BOOT_TIMEOUT = 120.0
+
+
 def _ensure_repo(workdir: Path) -> None:
     try:
         r = _run(["rev-parse", "--git-dir"], workdir)
@@ -37,7 +41,12 @@ def create(workdir: Path, path: str | Path, branch: str | None = None) -> str:
     r = _run(args, workdir)
     if r.returncode != 0:
         raise VCSError(f"git worktree add failed: {r.stderr.strip()}")
-    return str(Path(path).resolve())
+    # Resolve relative to the workdir, not the process cwd (Path.resolve
+    # alone would use os.getcwd()).
+    p = Path(path)
+    if not p.is_absolute():
+        p = workdir / p
+    return str(p.resolve())
 
 
 def remove(workdir: Path, path: str | Path, force: bool = False) -> None:
@@ -96,19 +105,31 @@ def list_worktrees(workdir: Path) -> list[dict]:
     return items
 
 
-def boot(workdir: Path, path: str | Path, commands: list[str]) -> str:
+def boot(workdir: Path, path: str | Path, commands: list[str],
+         timeout: float = _BOOT_TIMEOUT) -> str:
     """Run ``commands`` sequentially inside the worktree, capturing output.
 
-    Returns the combined stdout/stderr of all commands. Raises VCSError on
-    the first non-zero exit (output included in the message).
+    ``timeout`` bounds each command in seconds. Returns the combined
+    stdout/stderr of all commands. Raises VCSError on the first non-zero
+    exit or timeout (output included in the message).
     """
     _ensure_repo(workdir)
-    wt = Path(path).resolve()
+    wt = Path(path)
+    if not wt.is_absolute():
+        wt = workdir / wt
+    wt = wt.resolve()
     out: list[str] = []
     for cmd in commands:
         try:
             r = subprocess.run(cmd, shell=True, cwd=str(wt),
-                               capture_output=True, text=True)
+                               capture_output=True, text=True,
+                               timeout=timeout)
+        except subprocess.TimeoutExpired as exc:
+            out.append(f"$ {cmd}\n{exc.stdout or ''}{exc.stderr or ''}")
+            raise VCSError(
+                f"boot command timed out after {timeout:g}s: {cmd!r}\n"
+                f"{exc.stdout or ''}{exc.stderr or ''}"
+            ) from exc
         except OSError as exc:
             raise VCSError(f"boot command failed to start ({cmd!r}): {exc}") from exc
         out.append(f"$ {cmd}\n{r.stdout}{r.stderr}")

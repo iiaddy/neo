@@ -97,10 +97,17 @@ def find_agents(workdir: str | Path) -> dict[str, AgentInfo]:
 
 
 def expand_command_template(template: str, args: list[str]) -> str:
-    """Substitute $1..$n and $ARGUMENTS in a command template."""
-    out = template
-    for i, a in enumerate(args, start=1):
-        out = out.replace(f"${i}", a)
+    """Substitute $1..$n and $ARGUMENTS in a command template.
+
+    Single-pass: ``$10`` means argument ten (not ``$1`` followed by "0"),
+    and argument text is never rescanned for further $-tokens.
+    Unmatched ``$n`` (no such argument) is left as-is.
+    """
+    def _one_pass(m: re.Match) -> str:
+        idx = int(m.group(1)) - 1
+        return args[idx] if 0 <= idx < len(args) else m.group(0)
+
+    out = re.sub(r"\$(\d+)", _one_pass, template)
     out = out.replace("$ARGUMENTS", " ".join(args))
     if args and "$1" not in template and "$ARGUMENTS" not in template:
         out = out.rstrip() + "\n\n" + " ".join(args)

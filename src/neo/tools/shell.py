@@ -13,6 +13,10 @@ from .base import Tool, ToolContext, ToolResult
 
 _OUTPUT_CAP = 60_000
 
+# Upper bound for draining a process after SIGKILL (opencode: forceKillAfter
+# 3s). A wedged child must not hang the tool forever.
+_KILL_REAP_TIMEOUT = 3.0
+
 # Degrade warnings ("bwrap missing — running without sandbox") are noisy if
 # repeated on every call, so each distinct warning is shown once per process.
 _WARNED: set[str] = set()
@@ -92,7 +96,22 @@ class BashTool(Tool):
 
     async def run(self, args: dict, ctx: ToolContext) -> ToolResult:
         command = args["command"]
-        timeout_ms = max(1, int(args.get("timeout", 120000)))
+        raw_timeout = args.get("timeout", 120000)
+        try:
+            timeout_ms = int(raw_timeout)
+        except (TypeError, ValueError):
+            return ToolResult(
+                is_error=True,
+                output=f"invalid timeout: {raw_timeout!r} (must be an integer number of milliseconds)",
+                title="bash", details={"exit_code": -1})
+        if timeout_ms < 0:
+            # A negative timeout used to be coerced to 1ms — an instant,
+            # surprising timeout. Reject it like opencode's PositiveInt.
+            return ToolResult(
+                is_error=True,
+                output=f"invalid timeout: {timeout_ms}ms (must be >= 0)",
+                title="bash", details={"exit_code": -1})
+        timeout_ms = max(1, timeout_ms)
         raw_wd = args.get("workdir")
         cwd = str(ctx.workdir if raw_wd is None else (Path(raw_wd).expanduser()))
         if raw_wd is not None and not Path(cwd).is_absolute():
@@ -153,6 +172,7 @@ class BashTool(Tool):
             else:
                 proc = await _direct_spawn(None, command, cwd)
             timed_out = False
+            reap_failed = False
             try:
                 raw = await asyncio.wait_for(proc.communicate(), timeout=timeout_ms / 1000)
             except asyncio.TimeoutError:
@@ -161,7 +181,14 @@ class BashTool(Tool):
                     os.killpg(proc.pid, signal.SIGKILL)
                 except (ProcessLookupError, PermissionError, OSError):
                     pass
-                raw = await proc.communicate()
+                # Bound the post-kill drain: a wedged child (e.g. stuck in
+                # uninterruptible I/O) must not hang the tool forever.
+                try:
+                    raw = await asyncio.wait_for(proc.communicate(),
+                                                 timeout=_KILL_REAP_TIMEOUT)
+                except asyncio.TimeoutError:
+                    reap_failed = True
+                    raw = (b"", b"")
         finally:
             if session is not None:
                 await session.__aexit__()
@@ -175,6 +202,9 @@ class BashTool(Tool):
             if out:
                 out += "\n"
             out += f"timed out after {secs:g}s"
+            if reap_failed:
+                out += ("; the process did not exit within "
+                        f"{_KILL_REAP_TIMEOUT:g}s of SIGKILL and may still be running")
             return ToolResult(is_error=True, output=sandbox_note + out, title="bash",
                               details={"exit_code": exit_code})
 

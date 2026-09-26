@@ -103,7 +103,6 @@ class TodoReadTool(Tool):
         "properties": {},
         "additionalProperties": False,
     }
-    needs_approval = False
 
     async def run(self, args: dict, ctx: ToolContext) -> ToolResult:
         if not ctx.todos:

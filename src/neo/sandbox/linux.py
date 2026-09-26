@@ -19,7 +19,7 @@ import shlex
 from pathlib import Path
 
 from .config import SANDBOX_HTTP_PROXY_PORT, SANDBOX_SOCKS_PROXY_PORT, SandboxConfig
-from .policy import expand_path, resolved_paths, sanitize_env
+from .policy import resolved_paths, sanitize_env
 
 _EMPTY_NAME = "empty"
 
@@ -91,14 +91,29 @@ def build_bwrap_argv(
         argv += ["--bind", "/tmp", "/tmp"]
 
     # 4. writable areas (mkdir -p first so --bind never fails)
+    bound: set[str] = set()
     for entry in cfg.allow_write:
-        path = expand_path(entry, workdir)
-        try:
-            path.mkdir(parents=True, exist_ok=True)
-        except OSError:
-            pass
-        if path.exists():
-            argv += ["--bind", str(path), str(path)]
+        for path in resolved_paths(entry, workdir):
+            # Resolve symlinks like the deny lists do: binding the literal
+            # path would let the kernel follow a planted symlink (e.g.
+            # "data" -> /etc) and mount the target read-write — a sandbox
+            # escape. Anything resolving outside the workdir is skipped.
+            try:
+                real = path.resolve()
+            except OSError:
+                continue
+            if real != workdir and workdir not in real.parents:
+                continue
+            key = str(real)
+            if key in bound:
+                continue
+            bound.add(key)
+            try:
+                real.mkdir(parents=True, exist_ok=True)
+            except OSError:
+                pass
+            if real.exists():
+                argv += ["--bind", key, key]
 
     # 5a. deny_read — hide content
     empty = empty_file_path()

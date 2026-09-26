@@ -14,6 +14,7 @@ TOOL_PERMISSION_KEYS = {
     "grep": "read",
     "write": "edit",
     "edit": "edit",
+    "apply_patch": "edit",
     "bash": "bash",
     "webfetch": "web",
     "websearch": "web",
@@ -22,6 +23,8 @@ TOOL_PERMISSION_KEYS = {
     "todo_read": "session",
     "question": "session",
     "skill": "session",
+    "plan_enter": "session",
+    "plan_exit": "session",
 }
 
 

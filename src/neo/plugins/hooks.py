@@ -18,7 +18,6 @@ HOOK_POINTS: tuple[str, ...] = (
     "tool.execute.after",    # {"tool", "args", "result"}   -- may modify result.output
     "permission.ask",        # {"tool", "target", "detail", "decision"}
     "chat.params",           # {"system", "tools", "model"} -- may modify
-    "command.execute.before",  # {"name", "args"}
     "session.end",           # {"session_id", "reason"}
 )
 

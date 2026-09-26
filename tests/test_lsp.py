@@ -222,7 +222,7 @@ def test_id_generator_monotonic():
 def test_detect_server_builtin():
     assert detect_server("a.py").name == "pyright"
     assert detect_server("a.pyi").name == "pyright"
-    assert detect_server("a.ts").name == "typescript-language-server"
+    assert detect_server("a.ts").name == "eslint"  # more specific than tsserver
     assert detect_server("a.go").name == "gopls"
     assert detect_server("a.rs").name == "rust-analyzer"
     assert detect_server("a.xyz") is None

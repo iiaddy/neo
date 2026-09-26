@@ -56,7 +56,6 @@ def test_hook_points_exported():
         "tool.execute.after",
         "permission.ask",
         "chat.params",
-        "command.execute.before",
         "session.end",
     }
 

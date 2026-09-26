@@ -130,18 +130,27 @@ class AgentHarness:
                     yield E.RunEnd(reason="done")
                     return
 
+                # Doom-loop guard runs BEFORE execution: a third identical
+                # call is never allowed to touch the world. Synthetic tool
+                # results keep the transcript well-formed for repair_history.
+                if self._doom_guard(tool_calls):
+                    yield E.Notice(
+                        "Same tool call repeated 3 times — stopping to avoid a loop. "
+                        "Tell me how to proceed.", level="warn")
+                    for tc in tool_calls:
+                        messages.append({
+                            "role": "tool", "tool_call_id": tc["id"],
+                            "content": ("Tool call blocked: the same call was "
+                                        "already attempted 3 times."),
+                        })
+                    yield E.RunEnd(reason="doom_loop")
+                    return
+
                 tsink: list[E.AgentEvent] = []
                 edited = await self._execute_tools(messages, tool_calls,
                                                    sink=tsink)
                 for ev in tsink:
                     yield ev
-
-                if self._doom_guard(tool_calls):
-                    yield E.Notice(
-                        "Same tool call repeated 3 times — stopping to avoid a loop. "
-                        "Tell me how to proceed.", level="warn")
-                    yield E.RunEnd(reason="doom_loop")
-                    return
 
                 if edited:
                     async for ev in self._maybe_verify(messages):
@@ -194,15 +203,18 @@ class AgentHarness:
             schemas = params.get("tools", schemas)
 
         attempt = 0
-        text_parts: list[str] = []
-        reason_parts: list[str] = []
-        calls: dict[str, dict] = {}
-        finish = "stop"
-        text_started = reason_started = False
 
         while True:
             if self._cancel.is_set():
-                return "aborted", "".join(text_parts), []
+                return "aborted", "", []
+            # Per-attempt buffers: a failed attempt must not leak partial
+            # text, reasoning, or tool calls into the retry.
+            text_parts: list[str] = []
+            reason_parts: list[str] = []
+            calls: dict[str, dict] = {}
+            finish = "stop"
+            text_started = reason_started = False
+            attempt_tokens = [0, 0]  # input/output; committed only on success
             stream_error = None
             try:
                 async for pev in self.provider.stream(
@@ -223,8 +235,8 @@ class AgentHarness:
                         calls[pev.call_id] = {"name": pev.name,
                                              "args": json.dumps(pev.arguments)}
                     elif k == "usage_tick":
-                        self._in_tokens += pev.input_tokens
-                        self._out_tokens += pev.output_tokens
+                        attempt_tokens[0] += pev.input_tokens
+                        attempt_tokens[1] += pev.output_tokens
                     elif k == "stream_end":
                         finish = pev.finish
                     elif k == "stream_error":
@@ -238,6 +250,10 @@ class AgentHarness:
                 stream_error = type("SE", (), {"message": str(exc),
                                               "retryable": retryable})()
             if stream_error is None:
+                # Commit usage only for the successful attempt; failed
+                # attempts never inflate the session totals.
+                self._in_tokens += attempt_tokens[0]
+                self._out_tokens += attempt_tokens[1]
                 break
             if not stream_error.retryable or attempt >= MAX_RETRIES:
                 raise RuntimeError(f"Provider error: {stream_error.message}")
@@ -298,7 +314,8 @@ class AgentHarness:
                 continue
             target = self._target_for(tool.name, tc["arguments"])
             detail = self._detail_for(tool.name, tc["arguments"])
-            ok, reason = await self._permission(tool.name, target, detail)
+            ok, reason = await self._permission(tool.name, target, detail,
+                                                 args=tc.get("arguments"))
             if ok:
                 approved.append((tc, tool))
             else:
@@ -384,37 +401,76 @@ class AgentHarness:
             self._verify_streak = 0
         return edited
 
+    # Tools whose cost of an unwanted run (destroying user work) is too high
+    # for configuration or a cached answer to decide: they always invoke the
+    # user gate, bypassing policy rules and the always-allow memory.
+    _ALWAYS_ASK_TOOLS = frozenset({"undo"})
+
     async def _permission(self, tool_name: str, target: str,
-                          detail: str) -> tuple[bool, str]:
+                          detail: str, args: dict | None = None) -> tuple[bool, str]:
         # Plan mode is authoritative while active: it allows research tools
         # without approval popups and hard-denies code writes outside
         # .neo/plans/. A deny here is final.
         from ..plan.tools import plan_mode_active, plan_mode_allows
         if plan_mode_active(self.ctx):
+            if tool_name == "apply_patch":
+                # Check every touched file individually. Joining the paths
+                # into one space-separated string would turn the check into
+                # a single pseudo-path and let multi-file patches escape.
+                from ..patch import parse_patch
+                from ..plan.tools import plan_mode_allows_paths
+                try:
+                    ops = parse_patch(str((args or {}).get("patch", "")))
+                except ValueError:
+                    return False, ("In plan mode apply_patch with an "
+                                   "unparseable patch is denied.")
+                return plan_mode_allows_paths(
+                    [op.move_to or op.path for op in ops], self.ctx.workdir)
             return plan_mode_allows(tool_name, target, self.ctx.workdir)
+        if tool_name in self._ALWAYS_ASK_TOOLS:
+            answer = await self.ctx.gate(tool_name, target, detail)
+            if answer in ("once", "always"):
+                return True, ""
+            return False, (f"Rejected by user: {tool_name} on '{target}' was "
+                           "not approved.")
         policy = self.ctx.permissions
         key = policy.key_for_tool(tool_name)
-        # Bash: probe shlex-derived signatures from most to least specific.
-        # Per signature, the last matching rule wins (same as check());
-        # the first signature with any matching rule decides.
         if tool_name == "bash":
-            from ..scan import scan
+            # Bash: evaluate every command in a compound separately and
+            # combine the decisions: deny wins, then ask, then allow. Per
+            # signature the last matching rule wins (same as check()); per
+            # command, probing runs most- to least-specific and stops at
+            # the first signature with any matching rule.
+            from ..scan.bashscan import is_dynamic, scan_commands
             from .permissions import wildcard_match
-            for sig in scan(target):
-                sig_decision = None
-                for rule_key, pattern, action in policy._iter():
-                    if rule_key != "*" and rule_key != key:
-                        continue
-                    if wildcard_match(pattern, sig):
-                        sig_decision = action
-                if sig_decision == "allow":
-                    return True, ""
-                if sig_decision == "deny":
-                    return False, (
-                        f"Permission denied: bash '{sig}' is denied by policy.")
-                if sig_decision == "ask":
-                    break  # explicit ask rule: fall through to the gate below
-        decision = policy.check(key, target)
+            denied: str | None = None
+            ask = False
+            for raw, sigs in scan_commands(target):
+                cmd_decision: str | None = None
+                for sig in sigs:
+                    for rule_key, pattern, action in policy._iter():
+                        if rule_key != "*" and rule_key != key:
+                            continue
+                        if wildcard_match(pattern, sig):
+                            cmd_decision = action
+                    if cmd_decision is not None:
+                        break
+                if cmd_decision == "allow" and is_dynamic(raw):
+                    # Command substitution, backticks, and VAR= prefixes can
+                    # evaluate to something the static text hides; a static
+                    # allow rule must never silently permit them.
+                    cmd_decision = "ask"
+                if cmd_decision == "deny":
+                    denied = raw
+                    break
+                if cmd_decision != "allow":
+                    ask = True
+            if denied is not None:
+                return False, (
+                    f"Permission denied: bash '{denied}' is denied by policy.")
+            decision = "ask" if ask else "allow"
+        else:
+            decision = policy.check(key, target)
         plugins = getattr(self.ctx, "plugins", None)
         if plugins is not None:
             payload = await plugins.trigger("permission.ask", {
@@ -441,10 +497,10 @@ class AgentHarness:
 
     @staticmethod
     def _always_pattern(tool_name: str, target: str) -> str:
-        if tool_name == "bash":
-            from ..scan import first_word
-            first = first_word(target) or target
-            return f"{first} *"
+        # Remember the exact target (for bash: the full command), never a
+        # truncated prefix. wildcard_match() treats a pattern without a
+        # trailing " *" as an exact match, so remembering "rm notes.txt"
+        # can never also permit "rm -rf /".
         return target
 
     @staticmethod
@@ -539,11 +595,22 @@ class AgentHarness:
         messages.append({"role": "user",
                          "content": "[Verification]\n" + "\n".join(lines) + tail})
 
+    @staticmethod
+    def _pair_safe_keep_from(messages: list[dict], keep_from: int) -> int:
+        # A cut point that lands on a "tool" message would orphan the result
+        # from its assistant tool_calls parent. Advance past the contiguous
+        # run of tool results so the pair stays whole in the summarized head.
+        while (keep_from < len(messages)
+               and messages[keep_from].get("role") == "tool"):
+            keep_from += 1
+        return keep_from
+
     async def _maybe_compact(self, messages: list[dict]):
         plan = plan_compaction(messages, self.config.context_window)
         if plan is None:
             return
         _, keep_from = plan
+        keep_from = self._pair_safe_keep_from(messages, keep_from)
         yield E.CompactStart()
         head, tail = messages[:keep_from], messages[keep_from:]
         summary_text = await self._summarize(head)

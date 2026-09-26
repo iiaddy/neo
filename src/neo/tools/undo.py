@@ -28,7 +28,6 @@ class UndoTool(Tool):
         "required": ["handle"],
         "additionalProperties": False,
     }
-    needs_approval = True  # destructive: always ask
 
     async def run(self, args: dict, ctx: ToolContext) -> ToolResult:
         from pathlib import Path

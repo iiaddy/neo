@@ -20,7 +20,6 @@ class SkillTool(Tool):
         "required": ["name"],
         "additionalProperties": False,
     }
-    needs_approval = False
 
     async def run(self, args: dict, ctx: ToolContext) -> ToolResult:
         name = str(args.get("name", "")).strip()

@@ -11,6 +11,7 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
+from neo.agent.permissions import PermissionPolicy  # noqa: E402
 from neo.patch import ApplyPatchTool, PatchApplyError, apply_ops, parse_patch  # noqa: E402
 from neo.tools.base import ToolContext  # noqa: E402
 
@@ -183,7 +184,7 @@ def test_tool_run_end_to_end(tmp_path):
     wd = _workdir(tmp_path)
     ctx = _ctx(wd)
     tool = ApplyPatchTool()
-    assert tool.name == "apply_patch" and tool.needs_approval is True
+    assert tool.name == "apply_patch" and PermissionPolicy().key_for_tool("apply_patch") == "edit"
     res = asyncio.run(tool({"patch": UPDATE_PATCH}, ctx))
     assert not res.is_error
     assert "updated a.txt" in res.output

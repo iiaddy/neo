@@ -13,7 +13,6 @@ THEMES: dict[str, dict[str, str]] = {
         "green": "#3fb950",
         "red": "#f85149",
         "yellow": "#d29922",
-        "user_bg": "#1c2b3a",
     },
     "neo-light": {
         "background": "#ffffff",
@@ -26,7 +25,6 @@ THEMES: dict[str, dict[str, str]] = {
         "green": "#1a7f37",
         "red": "#d1242f",
         "yellow": "#9a6700",
-        "user_bg": "#ddf4ff",
     },
     "neo-amber": {
         "background": "#14100a",
@@ -39,7 +37,6 @@ THEMES: dict[str, dict[str, str]] = {
         "green": "#7fb069",
         "red": "#e0705f",
         "yellow": "#e8a33d",
-        "user_bg": "#2a2115",
     },
 }
 

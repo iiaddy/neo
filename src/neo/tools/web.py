@@ -13,6 +13,9 @@ from .base import Tool, ToolContext, ToolResult
 
 _FETCH_TIMEOUT = 15.0
 _FETCH_CAP = 30_000
+# Raw download cap: stream the body and stop reading past this, so a huge
+# file can never balloon memory before the text cap below is applied.
+_DOWNLOAD_CAP = 5 * 1024 * 1024
 _SEARCH_TIMEOUT = 15.0
 _UA = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) neo/0.1"
 
@@ -95,7 +98,6 @@ class WebFetchTool(Tool):
         "required": ["url"],
         "additionalProperties": False,
     }
-    needs_approval = False
 
     async def run(self, args: dict, ctx: ToolContext) -> ToolResult:
         url = args["url"].strip()
@@ -106,13 +108,33 @@ class WebFetchTool(Tool):
             return ToolResult(is_error=True, output=f'format must be "markdown" or "text", got {fmt!r}', title=self.name)
         try:
             async with _make_client(_FETCH_TIMEOUT) as client:
-                resp = await client.get(url)
-                resp.raise_for_status()
-                content_type = resp.headers.get("content-type", "")
-                if "html" in content_type or "<html" in resp.text[:2000].lower():
-                    text = _html_to_text(resp.text, markdown=(fmt == "markdown"), base_url=str(resp.url))
-                else:
-                    text = resp.text
+                # Stream the body: resp.text would download the entire file
+                # into memory before the char cap below is applied.
+                async with client.stream("GET", url) as resp:
+                    resp.raise_for_status()
+                    content_type = resp.headers.get("content-type", "")
+                    base_url = str(resp.url)
+                    charset = resp.charset_encoding or "utf-8"
+                    chunks: list[bytes] = []
+                    downloaded = 0
+                    hit_cap = False
+                    async for chunk in resp.aiter_bytes():
+                        if downloaded >= _DOWNLOAD_CAP:
+                            hit_cap = True
+                            break
+                        take = chunk[: _DOWNLOAD_CAP - downloaded]
+                        chunks.append(take)
+                        downloaded += len(take)
+                        if len(take) < len(chunk):
+                            hit_cap = True
+                            break
+                    raw_body = b"".join(chunks)
+            try:
+                text = raw_body.decode(charset, errors="replace")
+            except (LookupError, UnicodeDecodeError):
+                text = raw_body.decode("utf-8", errors="replace")
+            if "html" in content_type or "<html" in text[:2000].lower():
+                text = _html_to_text(text, markdown=(fmt == "markdown"), base_url=base_url)
         except Exception as exc:  # noqa: BLE001
             return ToolResult(is_error=True, output=f"fetch failed: {type(exc).__name__}: {exc}", title=self.name)
         truncated = False
@@ -120,6 +142,8 @@ class WebFetchTool(Tool):
             text = text[:_FETCH_CAP]
             truncated = True
         out = text or "(empty page)"
+        if hit_cap:
+            out += f"\n... (download capped at {_DOWNLOAD_CAP // (1024 * 1024)}MB; content truncated)"
         if truncated:
             out += f"\n... (page capped at {_FETCH_CAP} chars)"
         return ToolResult(output=out, title=url)
@@ -137,7 +161,6 @@ class WebSearchTool(Tool):
         "required": ["query"],
         "additionalProperties": False,
     }
-    needs_approval = False
 
     async def run(self, args: dict, ctx: ToolContext) -> ToolResult:
         query = args["query"].strip()

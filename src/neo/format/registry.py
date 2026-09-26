@@ -199,7 +199,14 @@ def format_file(path: str | Path,
     changed = before != after
     out = (proc.stdout.decode("utf-8", errors="replace").strip() + "\n"
            + proc.stderr.decode("utf-8", errors="replace").strip()).strip()
-    if proc.returncode != 0 and not changed:
+    if proc.returncode != 0:
+        # A formatter that exits nonzero left the file in an unknown state:
+        # put the original bytes back and report failure, never success.
+        if changed:
+            try:
+                p.write_bytes(before)
+            except OSError:
+                pass
         detail = out[:500] or f"exit {proc.returncode}"
         return False, f"{fmt.name} failed: {detail}"
     summary = f"{fmt.name}: formatted {p.name}" if changed else f"{fmt.name}: no changes"

@@ -1,7 +1,7 @@
 """neo auth store: per-provider API keys in ~/.config/neo/auth.json.
 
 Resolution order for a key (see resolve_api_key):
-    env var -> auth.json -> config.providers[pid]["api_key"]
+    catalog env vars -> auth.json -> config.providers[pid]["api_key"]
 
 The store file is written with mode 0o600 and re-chmodded on every write,
 even when the file already existed.
@@ -10,12 +10,14 @@ from __future__ import annotations
 
 import json
 import os
+import re
 from pathlib import Path
 
 _DEFAULT_PATH = Path.home() / ".config" / "neo" / "auth.json"
 _FILE_MODE = 0o600
 
-# Explicit env-var mapping; anything else falls back to {PID.upper()}_API_KEY.
+# Explicit env-var mapping; anything else falls back to {PID}_API_KEY with
+# the provider id sanitized to uppercase-underscore form.
 _ENV_MAP: dict[str, tuple[str, ...]] = {
     "anthropic": ("ANTHROPIC_API_KEY",),
     "openai": ("OPENAI_API_KEY",),
@@ -23,12 +25,36 @@ _ENV_MAP: dict[str, tuple[str, ...]] = {
     "gemini": ("GEMINI_API_KEY", "GOOGLE_API_KEY"),
 }
 
+_SANITIZE_RE = re.compile(r"[^A-Z0-9]+")
+
+
+def _catalog_env_names(provider_id: str) -> tuple[str, ...]:
+    """Env var names declared by the provider catalog, or () when unknown."""
+    try:
+        # Lazy: neo.providers imports this module for key resolution, so a
+        # top-level import would be circular.
+        from .providers.catalog import PROVIDERS
+    except Exception:
+        return ()
+    pid = provider_id.lower()
+    for spec in PROVIDERS:
+        if spec.id == pid:
+            return tuple(spec.env_vars)
+    return ()
+
 
 def _env_names(provider_id: str) -> tuple[str, ...]:
+    # A catalog entry's env_vars are authoritative for that provider.
+    catalog = _catalog_env_names(provider_id)
+    if catalog:
+        return catalog
     explicit = _ENV_MAP.get(provider_id.lower())
     if explicit:
         return explicit
-    return (f"{provider_id.upper()}_API_KEY",)
+    # Sanitized fallback: "kimi-code" -> KIMI_CODE_API_KEY. A raw
+    # upper-cased id would give the invalid shell name KIMI-CODE_API_KEY.
+    safe = _SANITIZE_RE.sub("_", provider_id.upper()).strip("_")
+    return (f"{safe}_API_KEY",)
 
 
 class AuthStore:
@@ -70,14 +96,18 @@ class AuthStore:
         return dict(self._read_all())
 
 
-def resolve_api_key(provider_id: str, config, store: AuthStore | None = None) -> str | None:
-    """Resolve a provider's API key: env var -> auth.json -> config.
+def resolve_api_key(provider_id: str, config, store: AuthStore | None = None,
+                    env_vars: tuple[str, ...] | None = None) -> str | None:
+    """Resolve a provider's API key: env vars -> auth.json -> config.
 
     `config` may be a NeoConfig (config.providers[pid]["api_key"]) or any
-    object exposing the same mapping. Returns None when nothing is set.
+    object exposing the same mapping. `env_vars`, when given, are the
+    authoritative env names and are checked first; otherwise the catalog's
+    env_vars win over the hardcoded map and the sanitized
+    ``{PROVIDER_ID}_API_KEY`` fallback. Returns None when nothing is set.
     The key is never logged or printed by this function.
     """
-    for name in _env_names(provider_id):
+    for name in (tuple(env_vars) if env_vars else _env_names(provider_id)):
         value = os.environ.get(name)
         if value:
             return value

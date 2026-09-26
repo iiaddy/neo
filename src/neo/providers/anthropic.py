@@ -20,10 +20,14 @@ from .base import (
     ToolCallReady,
     UsageTick,
 )
-from .retry import is_retryable
+from .retry import _RETRY_PATTERNS, is_retryable
 
 _STOP_MAP = {"end_turn": "stop", "max_tokens": "length", "tool_use": "tool_calls"}
 _API_VERSION = "2023-06-01"
+
+# Mid-stream error types that are worth retrying even when the message
+# text doesn't match the generic retry patterns.
+_TRANSIENT_STREAM_ERROR_TYPES = ("overloaded_error", "api_error")
 
 
 def convert_messages(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -126,8 +130,15 @@ class AnthropicProvider(Provider):
         if response.status_code != 200:
             raw = await response.aread()
             text = raw.decode("utf-8", "replace")
+            message = text[:500]
+            if not message and response.status_code in (401, 403):
+                message = (
+                    f"HTTP {response.status_code}: invalid or missing Anthropic "
+                    "API key -- check the ANTHROPIC_API_KEY env var or "
+                    "providers.anthropic.api_key in neo.json"
+                )
             yield StreamError(
-                message=text[:500] or f"HTTP {response.status_code}",
+                message=message or f"HTTP {response.status_code}",
                 retryable=is_retryable(response.status_code, text),
             )
             return
@@ -160,12 +171,22 @@ class AnthropicProvider(Provider):
                 continue
 
             if event_name == "error":
-                message = (
-                    data.get("error", {}).get("message", payload)
-                    if isinstance(data, dict)
-                    else payload
+                err = data.get("error", {}) if isinstance(data, dict) else {}
+                if not isinstance(err, dict):
+                    err = {}
+                err_type = str(err.get("type", ""))
+                message = str(err.get("message", "") or payload)
+                # Mid-stream errors carry no HTTP status (is_retryable(None,
+                # ...) is always True), so classify by the error type and
+                # message text: overload/server errors are transient,
+                # auth/permission/request errors are not.
+                text = f"{err_type} {message}"
+                retryable = err_type in _TRANSIENT_STREAM_ERROR_TYPES or bool(
+                    _RETRY_PATTERNS.search(text)
                 )
-                yield StreamError(message=str(message)[:500], retryable=False)
+                yield StreamError(
+                    message=message[:500] or "stream error", retryable=retryable
+                )
                 return
 
             if event_name == "message_start":

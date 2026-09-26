@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import random
 import time
 from dataclasses import dataclass, field
@@ -39,13 +40,17 @@ class SessionStore:
         if not p.is_file():
             return []
         out = []
+        bad = 0
         for line in p.read_text(encoding="utf-8").splitlines():
             line = line.strip()
             if line:
                 try:
                     out.append(json.loads(line))
                 except json.JSONDecodeError:
-                    continue
+                    bad += 1
+        if bad:
+            logging.warning("session %s: skipped %d corrupt JSONL line(s) in %s",
+                            sid, bad, p)
         return out
 
     def list(self) -> list[dict]:
@@ -89,7 +94,4 @@ class SessionStore:
                 msgs.append({"role": "tool", "tool_call_id": r.get("call_id", ""),
                              "name": r.get("tool", ""), "content": r.get("output", ""),
                              "is_error": r.get("is_error", False)})
-            elif t == "compact":
-                msgs.append({"role": "user",
-                             "content": "[Summary of earlier conversation]\n" + r.get("summary", "")})
         return msgs

@@ -10,9 +10,13 @@ from .base import Tool, ToolContext, ToolResult
 
 _CHILD_TOOLSETS = {
     # agent kind -> tool names the child may call
-    "general": None,  # resolved at runtime: every tool except task/todo_write
+    "general": None,  # resolved at runtime: every tool except the excluded set
     "explore": {"read", "list_dir", "glob", "grep", "webfetch"},
 }
+
+# Tools a general subagent must never receive. undo is destructive and
+# always requires the user's own approval, so delegation can never grant it.
+_GENERAL_CHILD_EXCLUDE = frozenset({"task", "todo_write", "undo"})
 
 _SUBAGENT_SUFFIX = (
     "\nYou are a subagent (role: {agent}). Solve the task you were given and "
@@ -95,9 +99,9 @@ class TaskTool(Tool):
         )
         include = _CHILD_TOOLSETS[agent]
         if include is None:
-            exclude = {"task", "todo_write"}
             tools = build_toolset(child_ctx)
-            tools = {k: v for k, v in tools.items() if k not in exclude}
+            tools = {k: v for k, v in tools.items()
+                     if k not in _GENERAL_CHILD_EXCLUDE}
         else:
             tools = build_toolset(child_ctx, include=include)
 

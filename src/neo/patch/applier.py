@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from contextlib import AsyncExitStack
 from pathlib import Path
 from typing import Sequence
 
@@ -11,6 +12,19 @@ from .parser import PatchHunk, PatchOp, parse_patch
 
 class PatchApplyError(Exception):
     """A patch op could not be applied (missing file, hunk mismatch, ...)."""
+
+
+def _lock_path(workdir: Path, raw: str) -> Path:
+    """Normalize a patch path to the lock key the file tools use.
+
+    Patch paths are usually relative while edit/write resolve against the
+    workdir; without the same workdir-join + resolve here, the per-file
+    lock would use a different key and be silently bypassed.
+    """
+    p = Path(raw).expanduser()
+    if not p.is_absolute():
+        p = workdir / p
+    return p.resolve()
 
 
 def _safe_resolve(workdir: Path, raw: str) -> Path:
@@ -28,11 +42,28 @@ def _match_hunk(text_lines: list[str], hunk: PatchHunk) -> int | None:
     """Find the file line index where the hunk's old block starts.
 
     Old block = context + remove lines. Exact match first, then
-    whitespace-insensitive (line-trimmed) match. Returns None if no match.
+    whitespace-insensitive (line-trimmed) match. An ``end_of_file`` hunk
+    tries the end of the file first, then falls back to a forward search.
+    A pure-addition hunk (no old lines) appends at the end — before the
+    trailing empty line that represents the file's final newline.
+    Returns None if no match.
     """
     old = [t for kind, t in hunk.lines if kind in ("context", "remove")]
     if not old:
-        return 0  # pure-addition hunk applies at the top
+        # Pure-addition hunk: append at end. text.split("\n") leaves a
+        # trailing "" for the final newline; insert before it so the
+        # addition lands on its own lines at the end of the file.
+        if text_lines and text_lines[-1] == "":
+            return len(text_lines) - 1
+        return len(text_lines)
+    if hunk.end_of_file:
+        start = len(text_lines) - len(old)
+        if start >= 0:
+            seg = text_lines[start:]
+            if all(a == b for a, b in zip(seg, old)):
+                return start
+            if all(a.strip() == b.strip() for a, b in zip(seg, old)):
+                return start
     exact = _find_block(text_lines, old, lambda a, b: a == b)
     if exact is not None:
         return exact
@@ -141,7 +172,6 @@ class ApplyPatchTool(Tool):
         "required": ["patch"],
         "additionalProperties": False,
     }
-    needs_approval = True
 
     async def run(self, args: dict, ctx: ToolContext) -> ToolResult:
         patch_text = str(args.get("patch", ""))
@@ -156,8 +186,17 @@ class ApplyPatchTool(Tool):
         try:
             notes: list[str] = []
             for op in ops:
-                lock_path = Path(op.move_to or op.path)
-                async with path_lock(ctx, lock_path):
+                # Normalize lock keys exactly like the file tools resolve
+                # them (workdir-joined + resolved): a relative patch path
+                # must share the lock key with the absolute path edit/write
+                # use, or the per-file lock is silently bypassed. Move ops
+                # touch both ends, so both are locked (sorted for a stable
+                # acquisition order).
+                targets = [op.path] + ([op.move_to] if op.move_to else [])
+                keys = sorted({_lock_path(ctx.workdir, t) for t in targets})
+                async with AsyncExitStack() as stack:
+                    for key in keys:
+                        await stack.enter_async_context(path_lock(ctx, key))
                     notes.extend(apply_ops([op], ctx.workdir))
         except PatchApplyError as exc:
             detail = f"patch failed: {exc}"

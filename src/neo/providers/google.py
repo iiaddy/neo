@@ -149,8 +149,15 @@ class GoogleProvider(Provider):
         if response.status_code != 200:
             raw = await response.aread()
             text = raw.decode("utf-8", "replace")
+            message = text[:500]
+            if not message and response.status_code in (401, 403):
+                message = (
+                    f"HTTP {response.status_code}: invalid or missing Google API "
+                    "key -- check the GEMINI_API_KEY (or GOOGLE_API_KEY) env var "
+                    "or providers.google.api_key in neo.json"
+                )
             yield StreamError(
-                message=text[:500] or f"HTTP {response.status_code}",
+                message=message or f"HTTP {response.status_code}",
                 retryable=is_retryable(response.status_code, text),
             )
             return
@@ -164,15 +171,30 @@ class GoogleProvider(Provider):
         buffer = ""
         finish = "stop"
         call_seq = 0
-        seen_data = False
+        errored = False
+        # Gemini repeats usageMetadata cumulatively on later chunks; only the
+        # latest snapshot is meaningful, emitted once at stream end.
+        latest_usage: dict[str, Any] | None = None
 
         async def handle_chunk(text: str) -> AsyncIterator[ProviderEvent]:
-            nonlocal finish, call_seq, seen_data, buffer
+            nonlocal finish, call_seq, errored, latest_usage, buffer
             buffer += text
             lines = buffer.split("\n")
             buffer = lines.pop()  # keep possibly-incomplete trailing fragment
             for value in _safe_json_values("\n".join(lines)):
-                seen_data = True
+                if value.get("error"):
+                    errored = True
+                    err = value["error"] or {}
+                    code = err.get("code")
+                    try:
+                        status = int(code) if code is not None else None
+                    except (TypeError, ValueError):
+                        status = None
+                    yield StreamError(
+                        message=str(err.get("message") or err or value)[:500],
+                        retryable=is_retryable(status, str(err.get("message") or "")),
+                    )
+                    continue
                 async for event in self._handle_value(value):
                     if isinstance(event, ToolCallReady):
                         call_seq += 1
@@ -181,6 +203,12 @@ class GoogleProvider(Provider):
                             name=event.name,
                             arguments=event.arguments,
                         )
+                    elif isinstance(event, UsageTick):
+                        latest_usage = {
+                            "input_tokens": event.input_tokens,
+                            "output_tokens": event.output_tokens,
+                        }
+                        continue
                     yield event
                 for candidate in value.get("candidates") or []:
                     fr = candidate.get("finishReason")
@@ -195,7 +223,12 @@ class GoogleProvider(Provider):
         # Flush any trailing fragment at end of stream.
         async for event in handle_chunk("\n"):
             yield event
-        if seen_data:
+        # A stream that closes without an error always terminates with
+        # StreamEnd -- even when it carried no data -- so the agent loop
+        # never hangs waiting for a terminal event.
+        if not errored:
+            if latest_usage is not None:
+                yield UsageTick(**latest_usage)
             yield StreamEnd(finish=finish)
 
     async def _handle_value(

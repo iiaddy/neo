@@ -531,10 +531,11 @@ def test_resolve_provider_uses_cfg_override_and_env():
         assert p.api_key == "env-key"
         assert p.base_url == "https://x/v1"
 
+        # env var beats a stale api_key in config (documented env → auth.json → config order)
         p2 = resolve_provider(
             "spec-test", FakeCfg({"spec-test": {"api_key": "cfg-key", "base_url": "https://y/v1"}})
         )
-        assert p2.api_key == "cfg-key"
+        assert p2.api_key == "env-key"
         assert p2.base_url == "https://y/v1"
     finally:
         del _BY_ID["spec-test"]

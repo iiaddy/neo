@@ -58,28 +58,56 @@ class QuestionModal(ModalScreen):
         self._answers: dict[str, str] = {}
         self._qi = 0
 
+    def _current(self) -> dict | None:
+        if 0 <= self._qi < len(self._questions):
+            q = self._questions[self._qi]
+            if isinstance(q, dict):
+                return q
+        return None
+
     def compose(self) -> ComposeResult:
         with Vertical(classes="modal"):
             yield Label("question", classes="modal-title")
-            q = self._questions[self._qi]
+            q = self._current()
+            if q is None:
+                yield Static(Text("no questions to show."))
+                yield Button("Dismiss", id="q-dismiss")
+                return
             header = q.get("header") or f"Q{self._qi + 1}"
             yield Static(Text(f"{header}: {q.get('question', '')}"))
-            for i, opt in enumerate(q.get("options", [])):
+            opts = q.get("options", [])
+            if not opts:
+                # Degenerate question: still offer a keyboard-dismissable
+                # way out so the awaiting future always resolves.
+                yield Button("Dismiss", id="q-dismiss")
+                return
+            for i, opt in enumerate(opts):
                 label = opt.get("label", "")
                 desc = opt.get("description", "")
                 text = f"{label}" + (f" — {desc}" if desc else "")
                 yield Button(text, id=f"opt-{i}")
 
+    def _reject(self) -> None:
+        if not self._future.done():
+            self._future.set_result(None)
+        self.dismiss()
+
     @on(Button.Pressed)
     def _pressed(self, event: Button.Pressed) -> None:
         bid = event.button.id or ""
+        if bid == "q-dismiss":
+            self._reject()
+            return
         if not bid.startswith("opt-"):
             return
         try:
             idx = int(bid[4:])
         except ValueError:
             return
-        q = self._questions[self._qi]
+        q = self._current()
+        if q is None:
+            self._reject()
+            return
         opts = q.get("options", [])
         if not (0 <= idx < len(opts)):
             return
@@ -102,6 +130,14 @@ class QuestionModal(ModalScreen):
         self._qi = qi
         self._answers = answers
         return self
+
+    def on_key(self, event) -> None:
+        # Escape rejects the question; the question tool turns a None
+        # answer into a clean error result instead of hanging.
+        if event.key == "escape":
+            event.prevent_default()
+            event.stop()
+            self._reject()
 
 
 class ChoiceModal(ModalScreen):
@@ -129,6 +165,34 @@ class ChoiceModal(ModalScreen):
 
     def on_mount(self) -> None:
         self.query_one("#choice-filter", Input).focus()
+        lst = self.query_one(ListView)
+        if self._choices:
+            lst.index = 0
+
+    def _shown_indexes(self) -> list[int]:
+        lst = self.query_one(ListView)
+        return [i for i, c in enumerate(lst.children) if c.display]
+
+    def _move_highlight(self, delta: int) -> None:
+        shown = self._shown_indexes()
+        if not shown:
+            return
+        lst = self.query_one(ListView)
+        cur = lst.index
+        pos = shown.index(cur) if cur in shown else (-1 if delta > 0 else 0)
+        lst.index = shown[max(0, min(len(shown) - 1, pos + delta))]
+
+    def _choose_highlighted(self) -> None:
+        lst = self.query_one(ListView)
+        idx = lst.index
+        if idx is None or not (0 <= idx < len(self._choices)):
+            return
+        if not lst.children[idx].display:
+            return  # filtered out; keep the picker open
+        _, value = self._choices[idx]
+        if not self._future.done():
+            self._future.set_result(value)
+        self.dismiss()
 
     @on(Input.Changed)
     def _filter_changed(self, event: Input.Changed) -> None:
@@ -138,6 +202,16 @@ class ChoiceModal(ModalScreen):
         keep = set(fuzzy_filter(self._filter, labels, limit=50))
         for i, item in enumerate(self.query(ListItem)):
             item.display = self._choices[i][0] in keep
+        shown = self._shown_indexes()
+        self.query_one(ListView).index = shown[0] if shown else None
+
+    @on(Input.Submitted)
+    def _filter_submitted(self, event: Input.Submitted) -> None:
+        # Enter while the filter has focus is consumed by the Input's
+        # submit binding; choose the highlighted match here instead.
+        if event.input.id == "choice-filter":
+            event.stop()
+            self._choose_highlighted()
 
     @on(ListView.Selected)
     def _selected(self, event: ListView.Selected) -> None:
@@ -151,6 +225,12 @@ class ChoiceModal(ModalScreen):
         if event.key == "escape" and not self._future.done():
             self._future.set_result(None)
             self.dismiss()
+        elif event.key in ("up", "down"):
+            # The filter Input has no up/down binding, so these bubble up
+            # here. Drive the list highlight OpenCode-style.
+            self._move_highlight(1 if event.key == "down" else -1)
+            event.prevent_default()
+            event.stop()
 
 
 class SecretModal(ModalScreen):

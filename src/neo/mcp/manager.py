@@ -33,7 +33,6 @@ def sanitize_name(raw: str) -> str:
 class _MCPTool(Tool):
     """Base for generated per-server tools. Subclasses carry ClassVars."""
 
-    needs_approval: ClassVar[bool] = True
 
     def __init__(self, client: MCPClient, tool_name: str) -> None:
         self._client = client
@@ -83,17 +82,25 @@ class MCPManager:
             if not scfg.get("enabled", True):
                 continue
             try:
+                client: MCPClient | None = None
                 client = client_from_config(name, scfg, self.workdir)
                 await client.connect()
             except MCPError as exc:
                 self.errors[name] = str(exc)
+                if client is not None:
+                    # connect() may have spawned a transport before failing.
+                    try:
+                        await client.close()
+                    except Exception:  # noqa: BLE001 - best-effort teardown
+                        pass
                 continue
             except Exception as exc:  # noqa: BLE001 - one bad server, never a crash
                 self.errors[name] = f"unexpected error: {exc}"
-                try:
-                    await client.close()
-                except Exception:  # noqa: BLE001 - best-effort teardown
-                    pass
+                if client is not None:
+                    try:
+                        await client.close()
+                    except Exception:  # noqa: BLE001 - best-effort teardown
+                        pass
                 continue
             try:
                 tool_defs = await client.list_tools()
@@ -151,7 +158,6 @@ class MCPManager:
                     "name": name,
                     "description": f"[mcp:{server}] {description}",
                     "parameters": params,
-                    "needs_approval": True,
                     "__doc__": f"MCP tool {t['name']!r} from server {server!r}.",
                 },
             )
@@ -170,11 +176,17 @@ class MCPManager:
     def _register_prompts(
         self, server: str, client: MCPClient, prompt_defs: list[dict]
     ) -> None:
+        seen = {pr["name"] for pr in self._prompts}
         for p in prompt_defs:
             args = p.get("arguments") or []
             arg_names = [a.get("name") for a in args if a.get("name")]
             template = " ".join(f"<{n}>" for n in arg_names)
             name = sanitize_name(f"{server}_{p['name']}")
+            base, i = name, 2
+            while name in seen:  # de-dupe sanitization collisions
+                name = f"{base}_{i}"
+                i += 1
+            seen.add(name)
             self._prompts.append(
                 {
                     "name": name,

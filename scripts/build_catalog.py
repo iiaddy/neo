@@ -70,6 +70,20 @@ CUSTOM = {
     "extra_headers": {},
 }
 
+# Upstream sometimes sorts a placeholder-sounding model name first, so the
+# generated alphabetical default looks stale. Pin a real model from the
+# provider's own upstream model list instead. Each override is only applied
+# when the model is actually present in that provider's list.
+DEFAULT_MODEL_OVERRIDES = {
+    # "Azure Cognitive Services": upstream lists claude-* placeholder names
+    # first; match neo's curated Azure default.
+    "azure-cognitive-services": "gpt-4.1",
+    # QVAC: "gemma4-31b" sorts first; gpt-oss-120b is a real model it serves.
+    "qvac": "gpt-oss-120b",
+    # SAP AI Core: "amazon--nova-lite" sorts first; prefer a mainstream model.
+    "sap-ai-core": "gpt-4.1",
+}
+
 CURATED = [
     {'id': 'anthropic', 'title': 'Anthropic', 'protocol': 'anthropic', 'base_url': 'https://api.anthropic.com', 'env_vars': ['ANTHROPIC_API_KEY'], 'default_model': 'claude-sonnet-4-6', 'extra_headers': {}},
     {'id': 'openai', 'title': 'OpenAI', 'protocol': 'openai', 'base_url': 'https://api.openai.com/v1', 'env_vars': ['OPENAI_API_KEY'], 'default_model': 'gpt-5.4', 'extra_headers': {}},
@@ -177,6 +191,10 @@ def build(opencode_ref: str, models_dev_ref: str) -> list[dict]:
             if _excluded(pid) or pid in curated_ids or pid in generated:
                 continue
             generated[pid] = row_for(pid, api[pid])
+    for pid, override in DEFAULT_MODEL_OVERRIDES.items():
+        row = generated.get(pid)
+        if row is not None and override in (row.get("models") or ()):
+            row["default_model"] = override
     rows.extend(generated[pid] for pid in sorted(generated))
 
     rows.append({**CUSTOM, "models": []})

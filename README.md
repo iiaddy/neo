@@ -258,7 +258,7 @@ hooks = {"tool.execute.after": on_tool_after}
 ```
 
 Available hooks: `tool.execute.before/after`, `permission.ask`,
-`chat.params`, `command.execute.before`, `session.end`. Plugins can also
+`chat.params`, `session.end`. Plugins can also
 register their own tools.
 
 ## Custom commands and tools
