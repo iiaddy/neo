@@ -2,7 +2,7 @@
 
 [![PyPI](https://img.shields.io/pypi/v/neo-agnt)](https://pypi.org/project/neo-agnt/)
 [![Python](https://img.shields.io/badge/python-3.10%2B-blue)](https://www.python.org/downloads/)
-[![Tests](https://img.shields.io/badge/tests-452%20passed-brightgreen)](https://github.com/iiaddy/neo)
+[![Tests](https://img.shields.io/badge/tests-491%20passed-brightgreen)](https://github.com/iiaddy/neo)
 [![License](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 [![Providers](https://img.shields.io/badge/providers-228-orange)](https://github.com/iiaddy/neo)
 
@@ -69,7 +69,7 @@ neo                                          # interactive TUI
 neo -p "fix the failing test in test_loop"   # headless, print reply and exit
 neo -p "..." --allow-all                     # headless, skip permission prompts
 neo --resume                                 # continue the last session
-neo init                                     # scaffold .neo/ (AGENTS.md, skills, commands, agents)
+neo init                                     # scaffold .neo/ (AGENTS.md, MEMORY.md, skills, commands, agents)
 neo models                                   # list providers and models
 neo config                                   # show resolved configuration
 neo snapshot | neo restore | neo fork        # git snapshots and session forks
@@ -77,8 +77,11 @@ neo snapshot | neo restore | neo fork        # git snapshots and session forks
 
 In the TUI: `/` opens the command palette, `@` completes file paths,
 `Ctrl+C` cancels the running turn, typing mid-run queues your message for
-the next turn. `/login` stores a provider key, `/logout` removes it,
-`/model` switches models within the active provider.
+the next turn. Scroll the transcript with `pageup`/`pagedown`,
+`shift+up`/`shift+down`, or the mouse wheel — the view stays pinned to new
+output only while you're already at the bottom. `/login` stores a provider
+key, `/logout` removes it, `/model` switches models within the active
+provider, `/memory` shows what's remembered.
 
 ## Configure
 
@@ -158,6 +161,19 @@ Non-trivial work is drafted to `.neo/plans/` first; edits stay locked to
 the plan until you approve the `plan_exit` prompt. Nothing outside the plan
 is touched before approval.
 
+## Memory
+
+neo remembers durable facts across sessions in plain markdown files,
+loaded into every session's context automatically:
+
+- `./MEMORY.md` / `./.neo/MEMORY.md` — project facts: conventions,
+  decisions, gotchas
+- `~/.config/neo/MEMORY.md` — facts about you that apply everywhere
+
+Say "remember that I prefer…" and neo appends the fact itself — project
+vs global, it decides. `/memory` shows what's stored. Secrets are never
+written there, only a note that they exist and where.
+
 ## Safety net
 
 ```bash
@@ -220,7 +236,7 @@ src/neo/
 ## Tests
 
 ```bash
-python -m pytest          # 452 passed, 4 skipped
+python -m pytest          # 491 passed, 4 skipped
 ```
 
 ## License
