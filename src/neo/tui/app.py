@@ -188,7 +188,7 @@ class NeoApp(App):
         self._ctx = None
         self._mcp = None
         self._discovered_cmds: dict = {}
-        self._running = False
+        self._turn_running = False
         self._pump: asyncio.Task | None = None
         self._transcript: Vertical | None = None
         self._status: StatusBar | None = None
@@ -304,7 +304,7 @@ class NeoApp(App):
         if self._status:
             self._status.set_phase("waiting for approval")
         choice = await fut
-        if self._status and self._running:
+        if self._status and self._turn_running:
             self._status.set_phase("working")
         return choice
 
@@ -324,7 +324,7 @@ class NeoApp(App):
         if text.startswith("/"):
             await self._run_slash(text[1:])
             return
-        if self._running and self._harness:
+        if self._turn_running and self._harness:
             self._harness.queue(text)
             self._notice("queued — runs when the current turn finishes.", "info")
             return
@@ -341,7 +341,7 @@ class NeoApp(App):
             self.store.set_title(self.session_id, text[:60])
         await self._transcript.mount(UserMessage(text))
         self._transcript.scroll_end(animate=False)
-        self._running = True
+        self._turn_running = True
         if self._status:
             self._status.set_busy(True, "working")
         self._pump = asyncio.create_task(self._pump_events())
@@ -370,7 +370,7 @@ class NeoApp(App):
         except Exception as e:  # noqa: BLE001
             self._notice(f"run error: {e}", "error")
         finally:
-            self._running = False
+            self._turn_running = False
             if self._status:
                 self._status.set_busy(False)
             self._update_context_gauge()
@@ -920,7 +920,7 @@ class NeoApp(App):
             await self._resume_session(picked)
 
     async def _new_session(self) -> None:
-        if self._running:
+        if self._turn_running:
             self._notice("finish the current run first.", "warn")
             return
         self.messages = []
@@ -933,7 +933,7 @@ class NeoApp(App):
         self._refresh_topbar()
 
     async def _resume_session(self, sid: str) -> None:
-        if self._running:
+        if self._turn_running:
             self._notice("finish the current run first.", "warn")
             return
         self.session_id = sid
@@ -982,7 +982,7 @@ class NeoApp(App):
     # -- actions ------------------------------------------------------------------------
 
     async def action_cancel_run(self) -> None:
-        if self._running and self._harness:
+        if self._turn_running and self._harness:
             self._harness.cancel()
         elif self._composer:
             self._composer.clear()
@@ -992,7 +992,7 @@ class NeoApp(App):
             self._sidebar.display = not self._sidebar.display
 
     async def action_clear_transcript(self) -> None:
-        if self._transcript and not self._running:
+        if self._transcript and not self._turn_running:
             await self._transcript.remove_children()
             self._notice("view cleared (history kept).", "info")
 

@@ -443,3 +443,67 @@ async def test_status_bar_model_updates_immediately():
         seen["new"] = bar.query_one(".status-right", Label).render()
     assert "anthropic/claude-sonnet-4-6" in str(seen["old"])
     assert "gemini/gemini" in str(seen["new"])
+
+
+@pytest.mark.asyncio
+async def test_submit_starts_turn_not_queued(tmp_path, monkeypatch):
+    """Regression: Textual's App sets its own ``_running=True`` while the app
+    runs, which shadowed the TUI's turn-state flag of the same name. Every
+    message submit then took the "queued" branch and no turn ever started."""
+    import os
+
+    monkeypatch.setenv("HOME", str(tmp_path))
+    # isolate config discovery from the real home / repo
+    (tmp_path / "work").mkdir()
+
+    from neo.config import discover_config
+    from neo.tui.app import NeoApp
+
+    cfg, _ = discover_config(str(tmp_path / "work"))
+
+    class _Ev:
+        def __init__(self, kind, **kw):
+            self.kind = kind
+            self.__dict__.update(kw)
+
+    class _FakeHarness:
+        model = "fake/model"
+        tools = {}
+
+        def __init__(self):
+            self._q = []
+
+        def queue(self, text):
+            self._q.append(text)
+
+        def take_queued(self):
+            q, self._q = self._q, []
+            return q
+
+        def cancel(self):
+            pass
+
+        async def run(self, messages):
+            yield _Ev("turn_start", index=0)
+            yield _Ev("text_start")
+            yield _Ev("text_delta", text="hello from fake")
+            yield _Ev("text_end", text="hello from fake")
+            messages.append({"role": "assistant", "content": "hello from fake"})
+            yield _Ev("turn_end")
+
+    app = NeoApp(workdir=str(tmp_path / "work"), config=cfg)
+    async with app.run_test(size=(100, 30)) as pilot:
+        await pilot.pause(0.5)
+        # the flag must be False while the app is running (Textual's own
+        # _running must not leak into it)
+        assert app._turn_running is False
+        app._harness = _FakeHarness()
+        await app._on_submit("hello")
+        assert app._turn_running is True, "submit must start a turn, not queue it"
+        for _ in range(40):
+            await pilot.pause(0.25)
+            if not app._turn_running:
+                break
+        assert app._turn_running is False
+        assert [m.get("role") for m in app.messages] == ["user", "assistant"]
+        assert app.messages[1]["content"] == "hello from fake"
